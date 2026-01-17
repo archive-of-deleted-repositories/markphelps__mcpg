@@ -1,0 +1,4 @@
+mod types;
+
+// Re-export the types for easier access
+pub use types::{Config, ServerConfig, TransportConfig};
