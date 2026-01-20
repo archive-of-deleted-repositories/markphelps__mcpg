@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -46,4 +47,32 @@ pub enum TransportConfig {
         #[serde(skip_serializing_if = "Option::is_none")]
         headers: Option<HashMap<String, String>>,
     },
+}
+
+impl ServerConfig {
+    pub fn validate(&self) -> Result<ServerConfig> {
+        match &self.transport {
+            TransportConfig::Stdio { command, .. } => {
+                if command.trim().is_empty() {
+                    bail!("Command for stdio transport cannot be empty");
+                }
+            }
+            TransportConfig::Http { url, .. } => {
+                if url.trim().is_empty() {
+                    bail!("URL for HTTP transport cannot be empty");
+                }
+            }
+        }
+        Ok(self.clone())
+    }
+}
+
+impl Config {
+    pub fn get_server(&self, name: &str) -> Option<&ServerConfig> {
+        self.servers.get(name)
+    }
+
+    pub fn servers(&self) -> impl Iterator<Item = (&String, &ServerConfig)> {
+        self.servers.iter()
+    }
 }
