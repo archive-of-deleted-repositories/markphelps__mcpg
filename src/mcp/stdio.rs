@@ -6,7 +6,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 
 use super::client::McpClient;
-use super::protocol::{CallToolResult, InitializeResult, JsonRpcRequest, JsonRpcResponse, Tool};
+use super::protocol::{
+    CallToolParams, CallToolResult, ClientCapabilities, ClientInfo, InitializeParams,
+    InitializeResult, JsonRpcRequest, JsonRpcResponse, ListToolsResult, PROTOCOL_VERSION, Tool,
+};
 
 /// MCP client that communicates via stdio (stdin/stdout)
 ///
@@ -24,8 +27,8 @@ pub struct StdioClient {
     // Request ID counter
     next_id: AtomicI64,
 
-    // Connection state
-    initialized: bool,
+    // Cached initialization result (also indicates if initialized)
+    init_result: Option<InitializeResult>,
 }
 
 impl StdioClient {
@@ -43,43 +46,97 @@ impl StdioClient {
             stdin: None,
             stdout: None,
             next_id: AtomicI64::new(1),
-            initialized: false,
+            init_result: None,
         }
     }
 
     /// Spawn the subprocess and capture stdin/stdout
     ///
-    /// TODO: Implement this method
-    /// - Use tokio::process::Command
-    /// - Set stdin(Stdio::piped()) and stdout(Stdio::piped())
-    /// - Apply environment variables
-    /// - Call .spawn()
-    /// - Extract and store stdin/stdout handles
     fn spawn(&mut self) -> Result<()> {
-        todo!("Implement process spawning")
+        let cmd = tokio::process::Command::new(&self.command)
+            .args(self.args.clone().unwrap_or_default())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .envs(self.env.clone().unwrap_or_default())
+            .spawn()?;
+
+        self.child = Some(cmd);
+        self.stdin = self.child.as_mut().and_then(|c| c.stdin.take());
+        self.stdout = self
+            .child
+            .as_mut()
+            .and_then(|c| c.stdout.take())
+            .map(BufReader::new);
+        Ok(())
     }
 
     /// Send a JSON-RPC request to the server
     ///
-    /// TODO: Implement this method
-    /// - Create JsonRpcRequest with next ID
-    /// - Serialize to JSON string
-    /// - Add newline character
-    /// - Write to stdin
-    /// - Flush stdin
-    async fn send_request(&mut self, method: &str, params: Option<serde_json::Value>) -> Result<i64> {
-        todo!("Implement request sending")
+    async fn send_request(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<i64> {
+        let request_id = self.next_request_id();
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: request_id.into(),
+            method: method.to_string(),
+            params,
+        };
+
+        let json = serde_json::to_string(&request)? + "\n";
+        if let Some(stdin) = &mut self.stdin {
+            stdin.write_all(json.as_bytes()).await?;
+            stdin.flush().await?;
+            return Ok(request_id);
+        }
+
+        Err(anyhow::anyhow!("Stdin not available"))
+    }
+
+    /// Send a JSON-RPC notification to the server (no response expected)
+    ///
+    async fn send_notification(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<()> {
+        let notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        });
+
+        let json = serde_json::to_string(&notification)? + "\n";
+        if let Some(stdin) = &mut self.stdin {
+            stdin.write_all(json.as_bytes()).await?;
+            stdin.flush().await?;
+            return Ok(());
+        }
+
+        Err(anyhow::anyhow!("Stdin not available"))
     }
 
     /// Read a JSON-RPC response from the server
     ///
-    /// TODO: Implement this method
-    /// - Use BufReader::read_line() to read until newline
-    /// - Parse JSON into JsonRpcResponse
-    /// - Check for errors in response
-    /// - Return result or error
     async fn read_response(&mut self) -> Result<JsonRpcResponse> {
-        todo!("Implement response reading")
+        let mut line = String::new();
+        if let Some(stdout) = &mut self.stdout {
+            stdout.read_line(&mut line).await?;
+            let response: JsonRpcResponse = serde_json::from_str(&line)?;
+
+            if response.error.is_some() {
+                return Err(anyhow::anyhow!(
+                    "Error response from server: {:?}",
+                    response.error
+                ));
+            }
+
+            return Ok(response);
+        }
+
+        Err(anyhow::anyhow!("Stdout not available"))
     }
 
     /// Get the next request ID
@@ -91,46 +148,129 @@ impl StdioClient {
 #[async_trait]
 impl McpClient for StdioClient {
     async fn initialize(&mut self) -> Result<InitializeResult> {
-        // TODO: Implement initialize
-        // 1. Check if already initialized
-        // 2. If not spawned, call spawn()
-        // 3. Send initialize request with client info
-        // 4. Read response
-        // 5. Parse InitializeResult from response.result
-        // 6. Set initialized = true
-        todo!("Implement initialize method")
+        if let Some(ref result) = self.init_result {
+            return Ok(result.clone());
+        }
+
+        // Not initialized yet, so initialize...
+        if self.child.is_none() {
+            self.spawn()?;
+        }
+
+        let params = serde_json::to_value(InitializeParams {
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            client_info: ClientInfo {
+                name: "mcpg".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            },
+            capabilities: ClientCapabilities::default(),
+        })?;
+
+        self.send_request("initialize", Some(params)).await?;
+        let response = self.read_response().await?;
+        let init_result: InitializeResult = serde_json::from_value(
+            response
+                .result
+                .ok_or_else(|| anyhow::anyhow!("No result in initialize response"))?,
+        )?;
+
+        // TODO: handle protocol version negotiation!
+        self.init_result = Some(init_result.clone());
+
+        // Send notifications/initialized to signal that initialization is complete
+        // This is a notification (no ID) not a request
+        self.send_notification("notifications/initialized", None)
+            .await?;
+
+        Ok(init_result)
     }
 
     async fn list_tools(&mut self) -> Result<Vec<Tool>> {
-        // TODO: Implement list_tools
-        // 1. Ensure initialized (call initialize if needed)
-        // 2. Send "tools/list" request
-        // 3. Read response
-        // 4. Parse tools array from response.result
-        todo!("Implement list_tools method")
+        if self.init_result.is_none() {
+            self.initialize().await?;
+        }
+
+        self.send_request("tools/list", None).await?;
+        let response = self.read_response().await?;
+        let list_tools_result: ListToolsResult = serde_json::from_value(
+            response
+                .result
+                .ok_or_else(|| anyhow::anyhow!("No result in tools/list response"))?,
+        )?;
+
+        // TODO: support pagination
+
+        Ok(list_tools_result.tools)
     }
 
     async fn call_tool(&mut self, name: &str, args: serde_json::Value) -> Result<CallToolResult> {
-        // TODO: Implement call_tool
-        // 1. Ensure initialized
-        // 2. Send "tools/call" request with CallToolParams
-        // 3. Read response
-        // 4. Parse CallToolResult from response.result
-        todo!("Implement call_tool method")
+        // Ensure initialized
+        if self.init_result.is_none() {
+            self.initialize().await?;
+        }
+
+        // Create CallToolParams with the tool name and arguments
+        let tool_params = CallToolParams {
+            name: name.to_string(),
+            arguments: Some(args),
+        };
+
+        // Serialize to JSON Value for the request
+        let params = serde_json::to_value(tool_params)?;
+
+        // Send the tools/call request
+        self.send_request("tools/call", Some(params)).await?;
+
+        // Read the response
+        let response = self.read_response().await?;
+
+        // Parse CallToolResult from the result field
+        let call_result: CallToolResult = serde_json::from_value(
+            response
+                .result
+                .ok_or_else(|| anyhow::anyhow!("No result in tools/call response"))?,
+        )?;
+
+        Ok(call_result)
     }
 
     async fn shutdown(&mut self) -> Result<()> {
-        // TODO: Implement shutdown
-        // 1. Send any cleanup messages if needed
-        // 2. Kill child process
-        // 3. Wait for process to exit
-        todo!("Implement shutdown method")
+        // Gracefully close stdin to signal the process we're done
+        if let Some(mut stdin) = self.stdin.take() {
+            let _ = stdin.shutdown().await; // Ignore errors on shutdown
+        }
+
+        // Kill the child process if it's still running
+        if let Some(child) = &mut self.child {
+            let _ = child.kill().await; // Ignore errors if already dead
+            let _ = child.wait().await; // Wait for cleanup
+        }
+
+        // Clear all handles
+        self.child = None;
+        self.stdin = None;
+        self.stdout = None;
+        self.init_result = None;
+
+        Ok(())
+    }
+}
+
+impl Drop for StdioClient {
+    /// Ensure child process is killed when client is dropped
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.child {
+            // Try to kill the process synchronously
+            // We can't use async in Drop, so we just try our best
+            let _ = child.start_kill();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::protocol::{ServerCapabilities, ServerInfo};
 
     #[test]
     fn test_stdio_client_creation() {
@@ -140,7 +280,7 @@ mod tests {
             None,
         );
         assert_eq!(client.command, "test-command");
-        assert!(!client.initialized);
+        assert!(client.init_result.is_none());
     }
 
     #[test]
@@ -152,8 +292,83 @@ mod tests {
         assert_eq!(id2, 2);
     }
 
-    // TODO: Add more tests once methods are implemented
-    // - Test spawning a simple echo process
-    // - Test sending/receiving JSON-RPC messages
-    // - Test error handling
+    #[test]
+    fn test_new_client_has_no_active_process() {
+        let client = StdioClient::new("test".to_string(), None, None);
+        assert!(client.child.is_none());
+        assert!(client.stdin.is_none());
+        assert!(client.stdout.is_none());
+    }
+
+    #[test]
+    fn test_client_with_args() {
+        let args = vec!["--flag".to_string(), "value".to_string()];
+        let client = StdioClient::new("cmd".to_string(), Some(args.clone()), None);
+        assert_eq!(client.args, Some(args));
+    }
+
+    #[test]
+    fn test_client_with_env() {
+        let mut env = HashMap::new();
+        env.insert("KEY".to_string(), "VALUE".to_string());
+        let client = StdioClient::new("cmd".to_string(), None, Some(env.clone()));
+        assert_eq!(client.env, Some(env));
+    }
+
+    #[test]
+    fn test_request_id_atomic_ordering() {
+        let client = StdioClient::new("test".to_string(), None, None);
+        // Test multiple increments
+        let ids: Vec<i64> = (0..10).map(|_| client.next_request_id()).collect();
+        // Verify sequential ordering
+        for i in 0..ids.len() - 1 {
+            assert_eq!(ids[i] + 1, ids[i + 1]);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_initialize_caches_result() {
+        // This test would need a mock server to be complete
+        // For now, we test the caching logic path
+        let mut client = StdioClient::new("echo".to_string(), None, None);
+
+        // Simulate already initialized state
+        let mock_result = InitializeResult {
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            capabilities: ServerCapabilities::default(),
+            server_info: ServerInfo {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+            },
+        };
+        client.init_result = Some(mock_result.clone());
+
+        // Initialize should return cached result without spawning
+        let result = client.initialize().await.unwrap();
+        assert_eq!(result.server_info.name, "test");
+        assert!(client.child.is_none()); // Should not have spawned
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_clears_state() {
+        let mut client = StdioClient::new("test".to_string(), None, None);
+
+        // Set some state
+        let mock_result = InitializeResult {
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            capabilities: ServerCapabilities::default(),
+            server_info: ServerInfo {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+            },
+        };
+        client.init_result = Some(mock_result);
+
+        // Shutdown should clear everything
+        client.shutdown().await.unwrap();
+        assert!(client.child.is_none());
+        assert!(client.stdin.is_none());
+        assert!(client.stdout.is_none());
+        assert!(client.init_result.is_none());
+    }
 }

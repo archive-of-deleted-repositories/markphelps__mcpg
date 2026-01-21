@@ -86,10 +86,13 @@ mod tests {
         let config = ServerConfig {
             transport: TransportConfig::Stdio {
                 command: "npx".to_string(),
-                args: Some(vec!["@modelcontextprotocol/server-brave-search".to_string()]),
-                env: Some(HashMap::from([
-                    ("BRAVE_API_KEY".to_string(), "test-key".to_string()),
-                ])),
+                args: Some(vec![
+                    "@modelcontextprotocol/server-brave-search".to_string(),
+                ]),
+                env: Some(HashMap::from([(
+                    "BRAVE_API_KEY".to_string(),
+                    "test-key".to_string(),
+                )])),
             },
         };
 
@@ -131,9 +134,10 @@ mod tests {
         let config = ServerConfig {
             transport: TransportConfig::Http {
                 url: "http://localhost:8080".to_string(),
-                headers: Some(HashMap::from([
-                    ("Authorization".to_string(), "Bearer token".to_string()),
-                ])),
+                headers: Some(HashMap::from([(
+                    "Authorization".to_string(),
+                    "Bearer token".to_string(),
+                )])),
             },
         };
 
@@ -225,9 +229,7 @@ mod tests {
             transport: TransportConfig::Stdio {
                 command: "npx".to_string(),
                 args: Some(vec!["server".to_string()]),
-                env: Some(HashMap::from([
-                    ("KEY".to_string(), "value".to_string()),
-                ])),
+                env: Some(HashMap::from([("KEY".to_string(), "value".to_string())])),
             },
         };
 
@@ -249,9 +251,10 @@ mod tests {
         let config = ServerConfig {
             transport: TransportConfig::Http {
                 url: "http://localhost:8080".to_string(),
-                headers: Some(HashMap::from([
-                    ("Auth".to_string(), "Bearer token".to_string()),
-                ])),
+                headers: Some(HashMap::from([(
+                    "Auth".to_string(),
+                    "Bearer token".to_string(),
+                )])),
             },
         };
 

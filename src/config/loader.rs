@@ -130,7 +130,12 @@ mod tests {
 
         let result = LoadedConfig::load(Some(config_path));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to read config file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to read config file")
+        );
     }
 
     #[test]
@@ -141,7 +146,12 @@ mod tests {
 
         let result = LoadedConfig::load(Some(config_path));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to parse config file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to parse config file")
+        );
     }
 
     #[test]
@@ -203,7 +213,7 @@ mod tests {
                 let canonical_path = path.canonicalize().unwrap();
                 let canonical_expected = config_path.canonicalize().unwrap();
                 assert_eq!(canonical_path, canonical_expected);
-            },
+            }
             _ => panic!("Expected Project source"),
         }
 
@@ -218,22 +228,30 @@ mod tests {
 
         // Create two different configs
         let provided_path = temp_dir.path().join("provided.json");
-        fs::write(&provided_path, r#"{
+        fs::write(
+            &provided_path,
+            r#"{
             "servers": {
                 "provided-server": {
                     "command": "provided"
                 }
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let env_path = temp_dir.path().join("env.json");
-        fs::write(&env_path, r#"{
+        fs::write(
+            &env_path,
+            r#"{
             "servers": {
                 "env-server": {
                     "command": "env"
                 }
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         // Set env var
         unsafe {
@@ -248,7 +266,7 @@ mod tests {
         assert!(loaded.config.get_server("env-server").is_none());
 
         match loaded.source {
-            ConfigSource::Provided(_) => {},
+            ConfigSource::Provided(_) => {}
             _ => panic!("Expected Provided source to take priority"),
         }
 
@@ -266,23 +284,31 @@ mod tests {
 
         // Create project config
         let project_path = temp_dir.path().join(PROJECT_MCP_CONFIG_FILE);
-        fs::write(&project_path, r#"{
+        fs::write(
+            &project_path,
+            r#"{
             "servers": {
                 "project-server": {
                     "command": "project"
                 }
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         // Create env config
         let env_path = temp_dir.path().join("env.json");
-        fs::write(&env_path, r#"{
+        fs::write(
+            &env_path,
+            r#"{
             "servers": {
                 "env-server": {
                     "command": "env"
                 }
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         // Get absolute path before changing directory
         let absolute_env_path = env_path.canonicalize().unwrap();
@@ -308,7 +334,7 @@ mod tests {
         assert!(loaded.config.get_server("project-server").is_none());
 
         match loaded.source {
-            ConfigSource::Env(_) => {},
+            ConfigSource::Env(_) => {}
             _ => panic!("Expected Env source to take priority"),
         }
     }
@@ -331,7 +357,12 @@ mod tests {
         std::env::set_current_dir(&original_dir).unwrap();
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No configuration file found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No configuration file found")
+        );
     }
 
     #[test]
@@ -354,7 +385,12 @@ mod tests {
 
         let result = LoadedConfig::from_file(&config_path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to read config file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to read config file")
+        );
     }
 
     #[test]
@@ -365,7 +401,12 @@ mod tests {
 
         let result = LoadedConfig::from_file(&config_path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to parse config file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to parse config file")
+        );
     }
 
     #[test]
@@ -376,7 +417,12 @@ mod tests {
 
         let result = LoadedConfig::from_file(&config_path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to parse config file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to parse config file")
+        );
     }
 
     #[test]
