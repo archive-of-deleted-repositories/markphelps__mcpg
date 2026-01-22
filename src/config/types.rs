@@ -50,7 +50,10 @@ pub enum TransportConfig {
 }
 
 impl ServerConfig {
-    pub fn validate(&self) -> Result<ServerConfig> {
+    /// Validate the server configuration
+    ///
+    /// Returns Ok(()) if valid, or an error describing the validation failure.
+    pub fn validate(&self) -> Result<()> {
         match &self.transport {
             TransportConfig::Stdio { command, .. } => {
                 if command.trim().is_empty() {
@@ -63,7 +66,7 @@ impl ServerConfig {
                 }
             }
         }
-        Ok(self.clone())
+        Ok(())
     }
 }
 

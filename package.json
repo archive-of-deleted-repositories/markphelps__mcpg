@@ -1,0 +1,11 @@
+{
+  "name": "mcpg",
+  "private": true,
+  "description": "MCP Gateway - progressive tool discovery for AI agents",
+  "scripts": {
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
+  }
+}

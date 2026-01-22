@@ -1,9 +1,13 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
+
+/// Default timeout for read operations from upstream servers (30 seconds)
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 use super::client::McpClient;
 use super::protocol::{
@@ -52,7 +56,12 @@ impl StdioClient {
 
     /// Spawn the subprocess and capture stdin/stdout
     ///
+    /// Returns an error if the client has already been spawned.
     fn spawn(&mut self) -> Result<()> {
+        if self.child.is_some() {
+            anyhow::bail!("Client already spawned - call shutdown() before respawning");
+        }
+
         let cmd = tokio::process::Command::new(&self.command)
             .args(self.args.clone().unwrap_or_default())
             .stdin(std::process::Stdio::piped())
@@ -118,13 +127,17 @@ impl StdioClient {
         Err(anyhow::anyhow!("Stdin not available"))
     }
 
-    /// Read a JSON-RPC response from the server
-    ///
+    /// Read a JSON-RPC response from the server with timeout
     async fn read_response(&mut self) -> Result<JsonRpcResponse> {
         let mut line = String::new();
         if let Some(stdout) = &mut self.stdout {
-            stdout.read_line(&mut line).await?;
-            let response: JsonRpcResponse = serde_json::from_str(&line)?;
+            tokio::time::timeout(DEFAULT_READ_TIMEOUT, stdout.read_line(&mut line))
+                .await
+                .context("Timeout reading response from upstream server")?
+                .context("Failed to read response from upstream server")?;
+
+            let response: JsonRpcResponse =
+                serde_json::from_str(&line).context("Failed to parse JSON-RPC response")?;
 
             if response.error.is_some() {
                 return Err(anyhow::anyhow!(
@@ -370,5 +383,82 @@ mod tests {
         assert!(client.stdin.is_none());
         assert!(client.stdout.is_none());
         assert!(client.init_result.is_none());
+    }
+
+    // === Error path tests ===
+
+    #[tokio::test]
+    async fn test_spawn_fails_with_nonexistent_command() {
+        let mut client = StdioClient::new(
+            "nonexistent-command-that-does-not-exist-12345".to_string(),
+            None,
+            None,
+        );
+        let result = client.spawn();
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_double_spawn_returns_error() {
+        // Use a real command that exists on all systems
+        let mut client = StdioClient::new("cat".to_string(), None, None);
+
+        // First spawn should succeed
+        let result1 = client.spawn();
+        assert!(result1.is_ok());
+        assert!(client.child.is_some());
+
+        // Second spawn should fail with error
+        let result2 = client.spawn();
+        assert!(result2.is_err());
+        assert!(result2.unwrap_err().to_string().contains("already spawned"));
+
+        // Clean up
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_send_request_without_stdin_returns_error() {
+        let mut client = StdioClient::new("test".to_string(), None, None);
+        // Don't spawn - stdin is None
+
+        let result = client.send_request("test/method", None).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Stdin not available")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_response_without_stdout_returns_error() {
+        let mut client = StdioClient::new("test".to_string(), None, None);
+        // Don't spawn - stdout is None
+
+        let result = client.read_response().await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Stdout not available")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_send_notification_without_stdin_returns_error() {
+        let mut client = StdioClient::new("test".to_string(), None, None);
+        // Don't spawn - stdin is None
+
+        let result = client.send_notification("test/notification", None).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Stdin not available")
+        );
     }
 }

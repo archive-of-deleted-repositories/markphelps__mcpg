@@ -66,6 +66,7 @@ impl From<String> for RequestId {
 
 impl JsonRpcRequest {
     /// Create a new JSON-RPC request
+    #[allow(dead_code)] // Used in tests
     pub fn new(id: impl Into<RequestId>, method: impl Into<String>, params: Option<Value>) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),

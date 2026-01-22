@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Debug)]
@@ -7,6 +8,17 @@ pub enum ConfigSource {
     Env(PathBuf),
     Project(PathBuf),
     User(PathBuf),
+}
+
+impl fmt::Display for ConfigSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigSource::Provided(p) => write!(f, "{}", p.display()),
+            ConfigSource::Env(p) => write!(f, "{} (from $MCPG_CONFIG)", p.display()),
+            ConfigSource::Project(p) => write!(f, "{}", p.display()),
+            ConfigSource::User(p) => write!(f, "{}", p.display()),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -70,8 +82,17 @@ impl LoadedConfig {
     fn from_file(path: &PathBuf) -> Result<super::Config> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-        serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse config file: {}", path.display()))
+        let config: super::Config = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+
+        // Validate each server config
+        for (name, server_config) in &config.servers {
+            server_config
+                .validate()
+                .with_context(|| format!("Invalid config for server '{}'", name))?;
+        }
+
+        Ok(config)
     }
 }
 

@@ -2,16 +2,160 @@
 
 ![CI](https://github.com/markphelps/mcpg/workflows/CI/badge.svg)
 
-MCP (Model Context Protocol) client library in Rust.
+**MCP Gateway** - A lightweight MCP server that acts as a gateway to upstream MCP servers with progressive tool discovery.
+
+## What is mcpg?
+
+`mcpg` is an MCP (Model Context Protocol) server that sits between AI agents (like Claude) and your collection of MCP servers. Instead of loading all tool definitions upfront (consuming thousands of context tokens), it provides progressive discovery through a search-first workflow.
+
+### The Problem
+
+Traditional MCP integration loads all tool schemas at startup:
+- 5 MCP servers × ~3,500 tokens each = **~18,000 tokens**
+- Severely limits context available for actual work
+- Wasteful when you only need 1-2 tools per task
+
+### The Solution
+
+`mcpg` acts as an MCP gateway server that exposes discovery tools:
+- **search** - Find relevant tools across all servers (~50 tokens)
+- **inspect** - Get schema for specific tool (~150 tokens)
+- **call** - Execute a tool on the upstream server
+- **list** - List available servers/tools
+
+**Result**: 99% reduction in context token usage
 
 ## Features
 
-- ✅ Stdio transport for MCP servers
-- ✅ JSON-RPC 2.0 protocol implementation
-- ✅ Tool listing and calling
+- ✅ MCP server implementation (stdio transport)
+- ✅ Progressive tool discovery via search/inspect/call
+- ✅ Upstream MCP client for stdio servers
+- ✅ Universal configuration layer
 - ✅ Automatic process lifecycle management
-- 🚧 Resources (planned)
-- 🚧 Prompts (planned)
+- 🚧 HTTP transport for upstream servers (planned)
+- 🚧 BM25 search ranking (planned)
+- 🚧 Resources and prompts (planned)
+
+## Quick Start
+
+### 1. Configure upstream servers
+
+Create `mcp.json` in your project directory:
+
+```json
+{
+  "servers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"]
+    },
+    "slack": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-slack"]
+    }
+  }
+}
+```
+
+### 2. Run mcpg
+
+```bash
+# mcpg reads from stdin and writes to stdout (MCP stdio transport)
+cargo run
+```
+
+### 3. Connect your AI agent
+
+Configure your AI agent to use mcpg as its MCP server. The agent will see 4 gateway tools instead of all upstream tools.
+
+## Gateway Tools
+
+mcpg exposes 4 gateway tools for progressive discovery:
+
+| Tool | Description |
+|------|-------------|
+| `search` | Find tools matching a query across all servers |
+| `inspect` | Get detailed schema for a specific tool |
+| `call` | Execute a tool on an upstream server |
+| `list` | List configured servers or tools on a server |
+
+### Example Workflow
+
+```
+AI Agent                      mcpg                     Upstream Servers
+    │                          │                              │
+    │ tools/list               │                              │
+    │─────────────────────────>│                              │
+    │ [search, inspect,        │                              │
+    │  call, list]             │                              │
+    │<─────────────────────────│                              │
+    │                          │                              │
+    │ call search(query="file")│                              │
+    │─────────────────────────>│  initialize()                │
+    │                          │─────────────────────────────>│
+    │                          │  tools/list                  │
+    │                          │─────────────────────────────>│
+    │                          │<─────────────────────────────│
+    │ [github] create_file     │                              │
+    │ [github] read_file       │                              │
+    │<─────────────────────────│                              │
+    │                          │                              │
+    │ call inspect(github,     │                              │
+    │              create_file)│                              │
+    │─────────────────────────>│                              │
+    │ {name, description,      │                              │
+    │  inputSchema}            │                              │
+    │<─────────────────────────│                              │
+    │                          │                              │
+    │ call call(github,        │  tools/call create_file      │
+    │           create_file,   │─────────────────────────────>│
+    │           {path, content})│                              │
+    │                          │<─────────────────────────────│
+    │ {result}                 │                              │
+    │<─────────────────────────│                              │
+```
+
+### JSON-RPC Examples
+
+```bash
+# Initialize connection
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"test","version":"1.0"},"capabilities":{}}}' | cargo run
+
+# List gateway tools
+echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | cargo run
+
+# Search for tools
+echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search","arguments":{"query":"echo"}}}' | cargo run
+
+# Call an upstream tool
+echo '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call","arguments":{"server":"everything","tool":"echo","args":{"message":"hello"}}}}' | cargo run
+```
+
+See `docs/examples/gateway-demo.sh` for a complete working demo.
+
+## Configuration
+
+mcpg looks for configuration in the following order:
+
+1. `$MCPG_CONFIG` environment variable
+2. `./mcp.json` (project directory)
+3. `~/.config/mcp/servers.json` (user config)
+
+### Config Format
+
+```json
+{
+  "servers": {
+    "server-name": {
+      "command": "executable",
+      "args": ["arg1", "arg2"],
+      "env": {
+        "API_KEY": "your-key"
+      }
+    }
+  }
+}
+```
 
 ## Testing
 

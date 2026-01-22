@@ -8,5 +8,6 @@
 //! SKIP_INTEGRATION_TESTS=1 cargo test
 //! ```
 
+mod gateway_tests;
 mod helpers;
 mod stdio_tests;
