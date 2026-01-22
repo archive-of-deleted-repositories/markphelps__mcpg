@@ -10,6 +10,7 @@ use crate::server::tools::gateway_tools;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tracing::{Instrument, error, info_span};
 
 impl GatewayServer {
     /// Handle a single JSON-RPC request
@@ -182,7 +183,7 @@ pub async fn run_server(config: crate::config::Config) -> Result<()> {
         let request: JsonRpcRequest = match serde_json::from_str(line_trimmed) {
             Ok(req) => req,
             Err(e) => {
-                eprintln!("Failed to parse request: {}", e);
+                error!(error = %e, "Failed to parse request");
                 continue;
             }
         };
@@ -190,11 +191,14 @@ pub async fn run_server(config: crate::config::Config) -> Result<()> {
         // Check if this is a notification (no response needed)
         let is_notification = request.method == "notifications/initialized";
 
+        // Create a span for this request
+        let span = info_span!("request", id = ?request.id, method = %request.method);
+
         // Handle request
-        let response = match server.handle_request(request).await {
+        let response = match server.handle_request(request).instrument(span).await {
             Ok(resp) => resp,
             Err(e) => {
-                eprintln!("Error handling request: {}", e);
+                error!(error = %e, "Error handling request");
                 continue;
             }
         };

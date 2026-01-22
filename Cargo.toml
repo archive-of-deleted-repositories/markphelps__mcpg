@@ -12,10 +12,17 @@ anyhow = "1.0"
 async-trait = "0.1"
 tokio = {version = "1.49", features = ["rt-multi-thread", "macros", "process", "io-util", "io-std"]}
 lru = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-opentelemetry = "0.28"
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["tonic"] }
 
 [dev-dependencies]
 tempfile = "3.14.0"
 serial_test = "3.2.0"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [[test]]
 name = "integration"

@@ -5,6 +5,7 @@ use crate::mcp::protocol::{CallToolResult, Content};
 use crate::server::GatewayServer;
 use anyhow::Result;
 use serde_json::Value;
+use tracing::{debug, info};
 
 impl GatewayServer {
     /// Handle the 'search' tool call
@@ -14,6 +15,8 @@ impl GatewayServer {
             .get("query")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: query"))?;
+
+        debug!(query = %query, "Searching for tools");
 
         // Ensure cache is populated
         if let Err(e) = self.ensure_cache_populated().await {
@@ -27,6 +30,8 @@ impl GatewayServer {
 
         // Search the cache
         let results = self.cache.search(query);
+
+        debug!(count = results.len(), "Search completed");
 
         if results.is_empty() {
             return Ok(CallToolResult {
@@ -69,6 +74,8 @@ impl GatewayServer {
             .get("tool")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: tool"))?;
+
+        debug!(server = %server, tool = %tool, "Inspecting tool");
 
         // Ensure cache is populated
         if let Err(e) = self.ensure_cache_populated().await {
@@ -160,23 +167,33 @@ impl GatewayServer {
             }
         };
 
+        info!(server = %server, tool = %tool, "Forwarding tool call");
+
         // Forward the call to upstream server
         match client.call_tool(tool, tool_args).await {
-            Ok(result) => Ok(result),
-            Err(e) => Ok(CallToolResult {
-                content: vec![Content::Text {
-                    text: format!(
-                        "Error calling tool '{}' on server '{}': {}",
-                        tool, server, e
-                    ),
-                }],
-                is_error: Some(true),
-            }),
+            Ok(result) => {
+                debug!(server = %server, tool = %tool, "Tool call succeeded");
+                Ok(result)
+            }
+            Err(e) => {
+                debug!(server = %server, tool = %tool, error = %e, "Tool call failed");
+                Ok(CallToolResult {
+                    content: vec![Content::Text {
+                        text: format!(
+                            "Error calling tool '{}' on server '{}': {}",
+                            tool, server, e
+                        ),
+                    }],
+                    is_error: Some(true),
+                })
+            }
         }
     }
 
     /// Handle the 'list' tool call
     pub async fn handle_list(&mut self, args: Value) -> Result<CallToolResult> {
+        debug!(server = ?args.get("server"), "Listing tools/servers");
+
         // Check if server is specified
         if let Some(server) = args.get("server").and_then(|v| v.as_str()) {
             // List tools for specific server

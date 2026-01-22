@@ -1,7 +1,41 @@
 //! Helper functions for integration tests
+//!
+//! ## Usage
+//!
+//! Tests should call `init_test_tracing()` at the start to suppress tracing output
+//! while keeping the tracing infrastructure functional. This is especially important
+//! to prevent noise during `cargo test` runs.
+//!
+//! ```rust,no_run
+//! use super::helpers::init_test_tracing;
+//!
+//! #[tokio::test]
+//! async fn my_test() {
+//!     init_test_tracing();
+//!     // ... test code
+//! }
+//! ```
 
 use anyhow::Result;
 use std::env;
+use std::sync::Once;
+
+static INIT: Once = Once::new();
+
+/// Initialize tracing for tests with a no-output subscriber
+///
+/// This ensures tests don't produce tracing output but the tracing
+/// infrastructure is properly initialized. Uses Once to ensure
+/// it's only called once per test run.
+pub fn init_test_tracing() {
+    INIT.call_once(|| {
+        // Install a subscriber that captures but doesn't print
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer() // Captures but doesn't print during tests
+            .try_init();
+    });
+}
 
 /// Check if integration tests should be skipped
 pub fn should_skip_integration_tests() -> bool {
@@ -63,7 +97,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_init_test_tracing() {
+        // Should not panic and can be called multiple times
+        init_test_tracing();
+        init_test_tracing();
+    }
+
+    #[test]
     fn test_create_everything_client() {
+        init_test_tracing();
         let client = create_everything_client();
         // Just verify it can be created without panicking
         drop(client);
@@ -71,6 +113,7 @@ mod tests {
 
     #[test]
     fn test_create_custom_client() {
+        init_test_tracing();
         let client = create_test_client("echo".to_string(), Some(vec!["test".to_string()]));
         drop(client);
     }

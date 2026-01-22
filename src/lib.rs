@@ -6,3 +6,4 @@
 pub mod config;
 pub mod mcp;
 pub mod server;
+pub mod telemetry;

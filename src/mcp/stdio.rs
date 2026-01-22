@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
+use tracing::{Instrument, debug, debug_span, info, info_span};
 
 /// Default timeout for read operations from upstream servers (30 seconds)
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -61,6 +62,8 @@ impl StdioClient {
         if self.child.is_some() {
             anyhow::bail!("Client already spawned - call shutdown() before respawning");
         }
+
+        debug!(command = %self.command, "Spawning upstream process");
 
         let cmd = tokio::process::Command::new(&self.command)
             .args(self.args.clone().unwrap_or_default())
@@ -161,93 +164,114 @@ impl StdioClient {
 #[async_trait]
 impl McpClient for StdioClient {
     async fn initialize(&mut self) -> Result<InitializeResult> {
-        if let Some(ref result) = self.init_result {
-            return Ok(result.clone());
+        async move {
+            if let Some(ref result) = self.init_result {
+                return Ok(result.clone());
+            }
+
+            // Not initialized yet, so initialize...
+            if self.child.is_none() {
+                self.spawn()?;
+            }
+
+            let params = serde_json::to_value(InitializeParams {
+                protocol_version: PROTOCOL_VERSION.to_string(),
+                client_info: ClientInfo {
+                    name: "mcpg".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: ClientCapabilities::default(),
+            })?;
+
+            self.send_request("initialize", Some(params)).await?;
+            let response = self.read_response().await?;
+            let init_result: InitializeResult = serde_json::from_value(
+                response
+                    .result
+                    .ok_or_else(|| anyhow::anyhow!("No result in initialize response"))?,
+            )?;
+
+            // TODO: handle protocol version negotiation!
+            self.init_result = Some(init_result.clone());
+
+            // Send notifications/initialized to signal that initialization is complete
+            // This is a notification (no ID) not a request
+            self.send_notification("notifications/initialized", None)
+                .await?;
+
+            Ok(init_result)
         }
-
-        // Not initialized yet, so initialize...
-        if self.child.is_none() {
-            self.spawn()?;
-        }
-
-        let params = serde_json::to_value(InitializeParams {
-            protocol_version: PROTOCOL_VERSION.to_string(),
-            client_info: ClientInfo {
-                name: "mcpg".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            },
-            capabilities: ClientCapabilities::default(),
-        })?;
-
-        self.send_request("initialize", Some(params)).await?;
-        let response = self.read_response().await?;
-        let init_result: InitializeResult = serde_json::from_value(
-            response
-                .result
-                .ok_or_else(|| anyhow::anyhow!("No result in initialize response"))?,
-        )?;
-
-        // TODO: handle protocol version negotiation!
-        self.init_result = Some(init_result.clone());
-
-        // Send notifications/initialized to signal that initialization is complete
-        // This is a notification (no ID) not a request
-        self.send_notification("notifications/initialized", None)
-            .await?;
-
-        Ok(init_result)
+        .instrument(info_span!("mcp_initialize"))
+        .await
     }
 
     async fn list_tools(&mut self) -> Result<Vec<Tool>> {
-        if self.init_result.is_none() {
-            self.initialize().await?;
+        async move {
+            if self.init_result.is_none() {
+                self.initialize().await?;
+            }
+
+            self.send_request("tools/list", None).await?;
+            let response = self.read_response().await?;
+            let list_tools_result: ListToolsResult = serde_json::from_value(
+                response
+                    .result
+                    .ok_or_else(|| anyhow::anyhow!("No result in tools/list response"))?,
+            )?;
+
+            // TODO: support pagination
+
+            let tools = list_tools_result.tools;
+            debug!(count = tools.len(), "Listed tools from upstream");
+            Ok(tools)
         }
-
-        self.send_request("tools/list", None).await?;
-        let response = self.read_response().await?;
-        let list_tools_result: ListToolsResult = serde_json::from_value(
-            response
-                .result
-                .ok_or_else(|| anyhow::anyhow!("No result in tools/list response"))?,
-        )?;
-
-        // TODO: support pagination
-
-        Ok(list_tools_result.tools)
+        .instrument(debug_span!("upstream_list_tools"))
+        .await
     }
 
     async fn call_tool(&mut self, name: &str, args: serde_json::Value) -> Result<CallToolResult> {
-        // Ensure initialized
-        if self.init_result.is_none() {
-            self.initialize().await?;
+        let tool_name = name.to_string();
+        let span = debug_span!("upstream_call", tool = %tool_name);
+
+        async move {
+            // Ensure initialized
+            if self.init_result.is_none() {
+                self.initialize().await?;
+            }
+
+            info!(tool = %tool_name, "Forwarding tool call to upstream");
+
+            // Create CallToolParams with the tool name and arguments
+            let tool_params = CallToolParams {
+                name: tool_name,
+                arguments: Some(args),
+            };
+
+            // Serialize to JSON Value for the request
+            let params = serde_json::to_value(tool_params)?;
+
+            // Send the tools/call request
+            self.send_request("tools/call", Some(params)).await?;
+
+            // Read the response
+            let response = self.read_response().await?;
+
+            // Parse CallToolResult from the result field
+            let call_result: CallToolResult = serde_json::from_value(
+                response
+                    .result
+                    .ok_or_else(|| anyhow::anyhow!("No result in tools/call response"))?,
+            )?;
+
+            Ok(call_result)
         }
-
-        // Create CallToolParams with the tool name and arguments
-        let tool_params = CallToolParams {
-            name: name.to_string(),
-            arguments: Some(args),
-        };
-
-        // Serialize to JSON Value for the request
-        let params = serde_json::to_value(tool_params)?;
-
-        // Send the tools/call request
-        self.send_request("tools/call", Some(params)).await?;
-
-        // Read the response
-        let response = self.read_response().await?;
-
-        // Parse CallToolResult from the result field
-        let call_result: CallToolResult = serde_json::from_value(
-            response
-                .result
-                .ok_or_else(|| anyhow::anyhow!("No result in tools/call response"))?,
-        )?;
-
-        Ok(call_result)
+        .instrument(span)
+        .await
     }
 
     async fn shutdown(&mut self) -> Result<()> {
+        debug!("Shutting down upstream client");
+
         // Gracefully close stdin to signal the process we're done
         if let Some(mut stdin) = self.stdin.take() {
             let _ = stdin.shutdown().await; // Ignore errors on shutdown

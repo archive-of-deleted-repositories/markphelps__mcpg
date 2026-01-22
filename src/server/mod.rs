@@ -19,6 +19,7 @@ use lru::LruCache;
 use search::{IndexedSearch, ToolSearch};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
+use tracing::{Instrument, debug_span, info_span, warn};
 
 /// Tool cache with reverse index and LRU query cache
 pub struct ToolCache {
@@ -143,20 +144,74 @@ impl GatewayServer {
     /// This connects to all upstream servers and caches their tools.
     /// Only runs once - subsequent calls return immediately.
     pub async fn ensure_cache_populated(&mut self) -> Result<()> {
-        if self.cache.is_populated {
-            return Ok(());
+        async move {
+            if self.cache.is_populated {
+                return Ok(());
+            }
+
+            let mut all_tools = Vec::new();
+
+            for (server_name, server_config) in self.config.servers() {
+                let span = debug_span!("upstream_init", server = %server_name);
+                let _enter = span.enter();
+
+                // Create client based on transport type
+                let mut client = match &server_config.transport {
+                    TransportConfig::Stdio { command, args, env } => {
+                        StdioClient::new(command.clone(), args.clone(), env.clone())
+                    }
+                    TransportConfig::Http { .. } => {
+                        // HTTP transport not yet implemented
+                        anyhow::bail!(
+                            "HTTP transport not yet supported for server '{}'",
+                            server_name
+                        );
+                    }
+                };
+
+                // Initialize and get tools
+                client.initialize().await?;
+                let tools = client.list_tools().await?;
+
+                // Store client for reuse
+                self.clients.insert(server_name.clone(), client);
+
+                // Cache tools with server name
+                for tool in tools {
+                    all_tools.push(CachedTool {
+                        server_name: server_name.clone(),
+                        tool,
+                    });
+                }
+            }
+
+            // Populate cache with tools (builds reverse index)
+            self.cache.populate(all_tools);
+            Ok(())
         }
+        .instrument(info_span!("cache_populate"))
+        .await
+    }
 
-        let mut all_tools = Vec::new();
+    /// Get or create a client for the given server
+    pub async fn get_or_create_client(&mut self, server_name: &str) -> Result<&mut StdioClient> {
+        async move {
+            // If client exists, return it
+            if self.clients.contains_key(server_name) {
+                return Ok(self.clients.get_mut(server_name).unwrap());
+            }
 
-        for (server_name, server_config) in self.config.servers() {
-            // Create client based on transport type
+            // Get server config
+            let server_config = self.config.get_server(server_name).ok_or_else(|| {
+                anyhow::anyhow!("Server '{}' not found in configuration", server_name)
+            })?;
+
+            // Create new client
             let mut client = match &server_config.transport {
                 TransportConfig::Stdio { command, args, env } => {
                     StdioClient::new(command.clone(), args.clone(), env.clone())
                 }
                 TransportConfig::Http { .. } => {
-                    // HTTP transport not yet implemented
                     anyhow::bail!(
                         "HTTP transport not yet supported for server '{}'",
                         server_name
@@ -164,58 +219,15 @@ impl GatewayServer {
                 }
             };
 
-            // Initialize and get tools
+            // Initialize the client
             client.initialize().await?;
-            let tools = client.list_tools().await?;
 
-            // Store client for reuse
-            self.clients.insert(server_name.clone(), client);
-
-            // Cache tools with server name
-            for tool in tools {
-                all_tools.push(CachedTool {
-                    server_name: server_name.clone(),
-                    tool,
-                });
-            }
+            // Store and return
+            self.clients.insert(server_name.to_string(), client);
+            Ok(self.clients.get_mut(server_name).unwrap())
         }
-
-        // Populate cache with tools (builds reverse index)
-        self.cache.populate(all_tools);
-        Ok(())
-    }
-
-    /// Get or create a client for the given server
-    pub async fn get_or_create_client(&mut self, server_name: &str) -> Result<&mut StdioClient> {
-        // If client exists, return it
-        if self.clients.contains_key(server_name) {
-            return Ok(self.clients.get_mut(server_name).unwrap());
-        }
-
-        // Get server config
-        let server_config = self.config.get_server(server_name).ok_or_else(|| {
-            anyhow::anyhow!("Server '{}' not found in configuration", server_name)
-        })?;
-
-        // Create new client
-        let mut client = match &server_config.transport {
-            TransportConfig::Stdio { command, args, env } => {
-                StdioClient::new(command.clone(), args.clone(), env.clone())
-            }
-            TransportConfig::Http { .. } => {
-                anyhow::bail!(
-                    "HTTP transport not yet supported for server '{}'",
-                    server_name
-                );
-            }
-        };
-
-        // Initialize the client
-        client.initialize().await?;
-
-        // Store and return
-        self.clients.insert(server_name.to_string(), client);
-        Ok(self.clients.get_mut(server_name).unwrap())
+        .instrument(debug_span!("get_or_create_client", server = %server_name))
+        .await
     }
 
     /// Get the configuration
@@ -227,7 +239,7 @@ impl GatewayServer {
     pub async fn shutdown(&mut self) -> Result<()> {
         for (name, client) in self.clients.iter_mut() {
             if let Err(e) = client.shutdown().await {
-                eprintln!("Warning: failed to shutdown client '{}': {}", name, e);
+                warn!(client = %name, error = %e, "Failed to shutdown client");
             }
         }
         self.clients.clear();
