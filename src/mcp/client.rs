@@ -1,7 +1,9 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 
 use super::protocol::{CallToolResult, InitializeResult, Tool};
+use super::stdio::StdioClient;
+use crate::config::{ServerConfig, TransportConfig};
 
 /// Trait defining the MCP client interface
 ///
@@ -31,17 +33,114 @@ pub trait McpClient {
     async fn shutdown(&mut self) -> Result<()>;
 }
 
-// TODO: Add factory function to create clients based on ServerConfig
-//
-// pub fn create_client(config: &ServerConfig) -> Result<Box<dyn McpClient>> {
-//     match &config.transport {
-//         TransportConfig::Stdio { command, args, env } => {
-//             // Create StdioClient
-//             todo!("Implement stdio client creation")
-//         }
-//         TransportConfig::Http { url, headers } => {
-//             // Create HttpClient
-//             todo!("Implement HTTP client creation")
-//         }
-//     }
-// }
+/// Create an MCP client based on the server configuration
+///
+/// # Arguments
+/// * `config` - The server configuration containing transport details
+///
+/// # Returns
+/// A boxed trait object implementing McpClient
+///
+/// # Errors
+/// Returns an error if HTTP transport is requested (not yet implemented)
+pub fn create_client(config: &ServerConfig) -> Result<Box<dyn McpClient>> {
+    match &config.transport {
+        TransportConfig::Stdio { command, args, env } => {
+            let client = StdioClient::new(command.clone(), args.clone(), env.clone());
+            Ok(Box::new(client))
+        }
+        TransportConfig::Http { .. } => {
+            bail!("HTTP transport is not yet implemented")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_create_client_stdio() {
+        let config = ServerConfig {
+            transport: TransportConfig::Stdio {
+                command: "npx".to_string(),
+                args: Some(vec!["@modelcontextprotocol/server-everything".to_string()]),
+                env: None,
+            },
+        };
+
+        let result = create_client(&config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_create_client_stdio_with_env() {
+        let mut env = HashMap::new();
+        env.insert("API_KEY".to_string(), "test-key".to_string());
+
+        let config = ServerConfig {
+            transport: TransportConfig::Stdio {
+                command: "uvx".to_string(),
+                args: Some(vec!["mcp-server-fetch".to_string()]),
+                env: Some(env),
+            },
+        };
+
+        let result = create_client(&config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_create_client_stdio_minimal() {
+        let config = ServerConfig {
+            transport: TransportConfig::Stdio {
+                command: "node".to_string(),
+                args: None,
+                env: None,
+            },
+        };
+
+        let result = create_client(&config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_create_client_http_not_implemented() {
+        let config = ServerConfig {
+            transport: TransportConfig::Http {
+                url: "http://localhost:8080".to_string(),
+                headers: None,
+            },
+        };
+
+        let result = create_client(&config);
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(
+            err.to_string()
+                .contains("HTTP transport is not yet implemented")
+        );
+    }
+
+    #[test]
+    fn test_create_client_http_with_headers() {
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer token".to_string());
+
+        let config = ServerConfig {
+            transport: TransportConfig::Http {
+                url: "https://api.example.com".to_string(),
+                headers: Some(headers),
+            },
+        };
+
+        let result = create_client(&config);
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(
+            err.to_string()
+                .contains("HTTP transport is not yet implemented")
+        );
+    }
+}

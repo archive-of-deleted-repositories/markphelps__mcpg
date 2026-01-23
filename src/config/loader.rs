@@ -1,9 +1,10 @@
 use anyhow::{Context, Result, bail};
 use std::fmt;
 use std::path::PathBuf;
+use tracing::info;
 
 #[derive(Debug)]
-pub enum ConfigSource {
+enum ConfigSource {
     Provided(PathBuf),
     Env(PathBuf),
     Project(PathBuf),
@@ -21,45 +22,36 @@ impl fmt::Display for ConfigSource {
     }
 }
 
-#[derive(Debug)]
-pub struct LoadedConfig {
-    pub config: super::Config,
-    pub source: ConfigSource,
-}
-
 const MCPG_CONFIG_VAR: &str = "MCPG_CONFIG";
 const PROJECT_MCP_CONFIG_FILE: &str = "mcp.json";
 
-impl LoadedConfig {
-    pub fn load(path: Option<PathBuf>) -> Result<LoadedConfig> {
+impl super::Config {
+    pub fn load(path: Option<PathBuf>) -> Result<super::Config> {
         // 1. If a path is provided, use that
         if let Some(provided_path) = path {
-            let config = Self::from_file(&provided_path)?;
-            return Ok(LoadedConfig {
-                config,
-                source: ConfigSource::Provided(provided_path),
-            });
+            let config = from_file(&provided_path)?;
+            let source = ConfigSource::Provided(provided_path);
+            info!(source = %source, "Loaded configuration");
+            return Ok(config);
         }
 
         // 2. Check environment variable
         if let Ok(env_path) = std::env::var(MCPG_CONFIG_VAR) {
             let path = PathBuf::from(env_path);
-            let config = Self::from_file(&path)?;
-            return Ok(LoadedConfig {
-                config,
-                source: ConfigSource::Env(path),
-            });
+            let config = from_file(&path)?;
+            let source = ConfigSource::Env(path);
+            info!(source = %source, "Loaded configuration");
+            return Ok(config);
         }
 
         // 3. Check project directory
         if let Ok(current_dir) = std::env::current_dir() {
             let project_path = current_dir.join(PROJECT_MCP_CONFIG_FILE);
             if project_path.exists() {
-                let config = Self::from_file(&project_path)?;
-                return Ok(LoadedConfig {
-                    config,
-                    source: ConfigSource::Project(project_path),
-                });
+                let config = from_file(&project_path)?;
+                let source = ConfigSource::Project(project_path);
+                info!(source = %source, "Loaded configuration");
+                return Ok(config);
             }
         }
 
@@ -69,31 +61,30 @@ impl LoadedConfig {
             .join("mcp")
             .join("servers.json");
         if user_config_path.exists() {
-            let config = Self::from_file(&user_config_path)?;
-            return Ok(LoadedConfig {
-                config,
-                source: ConfigSource::User(user_config_path),
-            });
+            let config = from_file(&user_config_path)?;
+            let source = ConfigSource::User(user_config_path);
+            info!(source = %source, "Loaded configuration");
+            return Ok(config);
         }
 
         bail!("No configuration file found")
     }
+}
 
-    fn from_file(path: &PathBuf) -> Result<super::Config> {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-        let config: super::Config = serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+fn from_file(path: &PathBuf) -> Result<super::Config> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read config file: {}", path.display()))?;
+    let config: super::Config = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
 
-        // Validate each server config
-        for (name, server_config) in &config.servers {
-            server_config
-                .validate()
-                .with_context(|| format!("Invalid config for server '{}'", name))?;
-        }
-
-        Ok(config)
+    // Validate each server config
+    for (name, server_config) in &config.servers {
+        server_config
+            .validate()
+            .with_context(|| format!("Invalid config for server '{}'", name))?;
     }
+
+    Ok(config)
 }
 
 #[cfg(test)]
@@ -132,16 +123,11 @@ mod tests {
         let config_path = temp_dir.path().join("config.json");
         fs::write(&config_path, create_test_config_json()).unwrap();
 
-        let result = LoadedConfig::load(Some(config_path.clone()));
+        let result = super::super::Config::load(Some(config_path));
         assert!(result.is_ok());
 
-        let loaded = result.unwrap();
-        assert!(loaded.config.get_server("test-server").is_some());
-
-        match loaded.source {
-            ConfigSource::Provided(path) => assert_eq!(path, config_path),
-            _ => panic!("Expected Provided source"),
-        }
+        let config = result.unwrap();
+        assert!(config.get_server("test-server").is_some());
     }
 
     #[test]
@@ -149,7 +135,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("nonexistent.json");
 
-        let result = LoadedConfig::load(Some(config_path));
+        let result = super::super::Config::load(Some(config_path));
         assert!(result.is_err());
         assert!(
             result
@@ -165,7 +151,7 @@ mod tests {
         let config_path = temp_dir.path().join("invalid.json");
         fs::write(&config_path, "not valid json").unwrap();
 
-        let result = LoadedConfig::load(Some(config_path));
+        let result = super::super::Config::load(Some(config_path));
         assert!(result.is_err());
         assert!(
             result
@@ -187,16 +173,11 @@ mod tests {
             std::env::set_var(MCPG_CONFIG_VAR, config_path.to_str().unwrap());
         }
 
-        let result = LoadedConfig::load(None);
+        let result = super::super::Config::load(None);
         assert!(result.is_ok());
 
-        let loaded = result.unwrap();
-        assert!(loaded.config.get_server("test-server").is_some());
-
-        match loaded.source {
-            ConfigSource::Env(path) => assert_eq!(path, config_path),
-            _ => panic!("Expected Env source"),
-        }
+        let config = result.unwrap();
+        assert!(config.get_server("test-server").is_some());
 
         // Clean up
         unsafe {
@@ -222,21 +203,11 @@ mod tests {
             std::env::remove_var(MCPG_CONFIG_VAR);
         }
 
-        let result = LoadedConfig::load(None);
+        let result = super::super::Config::load(None);
         assert!(result.is_ok());
 
-        let loaded = result.unwrap();
-        assert!(loaded.config.get_server("test-server").is_some());
-
-        match loaded.source {
-            ConfigSource::Project(path) => {
-                // Use canonicalized paths for comparison to handle symlinks
-                let canonical_path = path.canonicalize().unwrap();
-                let canonical_expected = config_path.canonicalize().unwrap();
-                assert_eq!(canonical_path, canonical_expected);
-            }
-            _ => panic!("Expected Project source"),
-        }
+        let config = result.unwrap();
+        assert!(config.get_server("test-server").is_some());
 
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();
@@ -279,17 +250,12 @@ mod tests {
             std::env::set_var(MCPG_CONFIG_VAR, env_path.to_str().unwrap());
         }
 
-        let result = LoadedConfig::load(Some(provided_path.clone()));
+        let result = super::super::Config::load(Some(provided_path));
         assert!(result.is_ok());
 
-        let loaded = result.unwrap();
-        assert!(loaded.config.get_server("provided-server").is_some());
-        assert!(loaded.config.get_server("env-server").is_none());
-
-        match loaded.source {
-            ConfigSource::Provided(_) => {}
-            _ => panic!("Expected Provided source to take priority"),
-        }
+        let config = result.unwrap();
+        assert!(config.get_server("provided-server").is_some());
+        assert!(config.get_server("env-server").is_none());
 
         // Clean up
         unsafe {
@@ -340,7 +306,7 @@ mod tests {
             std::env::set_var(MCPG_CONFIG_VAR, absolute_env_path.to_str().unwrap());
         }
 
-        let result = LoadedConfig::load(None);
+        let result = super::super::Config::load(None);
 
         // Restore environment first to avoid affecting other tests
         unsafe {
@@ -350,14 +316,9 @@ mod tests {
 
         assert!(result.is_ok());
 
-        let loaded = result.unwrap();
-        assert!(loaded.config.get_server("env-server").is_some());
-        assert!(loaded.config.get_server("project-server").is_none());
-
-        match loaded.source {
-            ConfigSource::Env(_) => {}
-            _ => panic!("Expected Env source to take priority"),
-        }
+        let config = result.unwrap();
+        assert!(config.get_server("env-server").is_some());
+        assert!(config.get_server("project-server").is_none());
     }
 
     #[test]
@@ -372,7 +333,7 @@ mod tests {
             std::env::remove_var(MCPG_CONFIG_VAR);
         }
 
-        let result = LoadedConfig::load(None);
+        let result = super::super::Config::load(None);
 
         // Restore original directory first to avoid affecting other tests
         std::env::set_current_dir(&original_dir).unwrap();
@@ -392,7 +353,7 @@ mod tests {
         let config_path = temp_dir.path().join("test.json");
         fs::write(&config_path, create_test_config_json()).unwrap();
 
-        let result = LoadedConfig::from_file(&config_path);
+        let result = from_file(&config_path);
         assert!(result.is_ok());
 
         let config = result.unwrap();
@@ -404,7 +365,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("nonexistent.json");
 
-        let result = LoadedConfig::from_file(&config_path);
+        let result = from_file(&config_path);
         assert!(result.is_err());
         assert!(
             result
@@ -420,7 +381,7 @@ mod tests {
         let config_path = temp_dir.path().join("invalid.json");
         fs::write(&config_path, "{ invalid json }").unwrap();
 
-        let result = LoadedConfig::from_file(&config_path);
+        let result = from_file(&config_path);
         assert!(result.is_err());
         assert!(
             result
@@ -436,7 +397,7 @@ mod tests {
         let config_path = temp_dir.path().join("invalid_structure.json");
         fs::write(&config_path, create_invalid_config_json()).unwrap();
 
-        let result = LoadedConfig::from_file(&config_path);
+        let result = from_file(&config_path);
         assert!(result.is_err());
         assert!(
             result
@@ -444,17 +405,5 @@ mod tests {
                 .to_string()
                 .contains("Failed to parse config file")
         );
-    }
-
-    #[test]
-    fn test_config_source_display() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("test.json");
-
-        // Just verify that the enum variants exist and can be constructed
-        let _provided = ConfigSource::Provided(path.clone());
-        let _env = ConfigSource::Env(path.clone());
-        let _project = ConfigSource::Project(path.clone());
-        let _user = ConfigSource::User(path.clone());
     }
 }

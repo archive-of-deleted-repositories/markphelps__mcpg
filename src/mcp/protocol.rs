@@ -9,7 +9,8 @@ pub struct JsonRpcRequest {
     /// Always "2.0"
     pub jsonrpc: String,
     /// Request identifier
-    pub id: RequestId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<RequestId>,
     /// Method name
     pub method: String,
     /// Method parameters (optional)
@@ -70,7 +71,7 @@ impl JsonRpcRequest {
     pub fn new(id: impl Into<RequestId>, method: impl Into<String>, params: Option<Value>) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
-            id: id.into(),
+            id: Some(id.into()),
             method: method.into(),
             params,
         }
@@ -263,7 +264,7 @@ mod tests {
     fn test_jsonrpc_request_creation() {
         let request = JsonRpcRequest::new(1, "test_method", None);
         assert_eq!(request.jsonrpc, "2.0");
-        assert_eq!(request.id, RequestId::Number(1));
+        assert_eq!(request.id, Some(RequestId::Number(1)));
         assert_eq!(request.method, "test_method");
         assert!(request.params.is_none());
     }

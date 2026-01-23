@@ -92,7 +92,7 @@ impl StdioClient {
         let request_id = self.next_request_id();
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: request_id.into(),
+            id: Some(request_id.into()),
             method: method.to_string(),
             params,
         };

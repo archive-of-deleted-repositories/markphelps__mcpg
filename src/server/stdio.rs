@@ -14,32 +14,35 @@ use tracing::{Instrument, error, info_span};
 
 impl GatewayServer {
     /// Handle a single JSON-RPC request
-    pub async fn handle_request(&mut self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
-        match request.method.as_str() {
-            "initialize" => self.handle_initialize(request.id, request.params).await,
-            "notifications/initialized" => {
-                // This is a notification, no response needed
-                // But we return an empty response to satisfy the return type
-                Ok(JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id: request.id,
-                    result: Some(Value::Null),
-                    error: None,
-                })
-            }
-            "tools/list" => self.handle_tools_list(request.id).await,
-            "tools/call" => self.handle_tools_call(request.id, request.params).await,
-            method => Ok(JsonRpcResponse {
+    ///
+    /// Returns `None` for notifications (requests without an ID), `Some(response)` for requests.
+    pub async fn handle_request(
+        &mut self,
+        request: JsonRpcRequest,
+    ) -> Result<Option<JsonRpcResponse>> {
+        // If there's no ID, this is a notification - no response should be sent
+        let id = match request.id {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+
+        let response = match request.method.as_str() {
+            "initialize" => self.handle_initialize(id, request.params).await?,
+            "tools/list" => self.handle_tools_list(id).await?,
+            "tools/call" => self.handle_tools_call(id, request.params).await?,
+            method => JsonRpcResponse {
                 jsonrpc: "2.0".to_string(),
-                id: request.id,
+                id,
                 result: None,
                 error: Some(JsonRpcError {
                     code: -32601,
                     message: format!("Method not found: {}", method),
                     data: None,
                 }),
-            }),
-        }
+            },
+        };
+
+        Ok(Some(response))
     }
 
     async fn handle_initialize(
@@ -154,7 +157,7 @@ impl GatewayServer {
 }
 
 /// Run the gateway server on stdin/stdout
-pub async fn run_server(config: crate::config::Config) -> Result<()> {
+pub async fn run(config: crate::config::Config) -> Result<()> {
     let mut server = GatewayServer::new(config);
 
     let stdin = tokio::io::stdin();
@@ -188,9 +191,6 @@ pub async fn run_server(config: crate::config::Config) -> Result<()> {
             }
         };
 
-        // Check if this is a notification (no response needed)
-        let is_notification = request.method == "notifications/initialized";
-
         // Create a span for this request
         let span = info_span!("request", id = ?request.id, method = %request.method);
 
@@ -203,10 +203,11 @@ pub async fn run_server(config: crate::config::Config) -> Result<()> {
             }
         };
 
-        // Don't send response for notifications
-        if is_notification {
-            continue;
-        }
+        // Don't send response for notifications (when handle_request returns None)
+        let response = match response {
+            Some(resp) => resp,
+            None => continue,
+        };
 
         // Write response
         let response_json = serde_json::to_string(&response)?;
@@ -253,7 +254,7 @@ mod tests {
             })),
         );
 
-        let response = server.handle_request(request).await.unwrap();
+        let response = server.handle_request(request).await.unwrap().unwrap();
         assert!(response.error.is_none());
         assert!(response.result.is_some());
 
@@ -267,7 +268,7 @@ mod tests {
         let mut server = create_test_server();
         let request = JsonRpcRequest::new(2, "tools/list", None);
 
-        let response = server.handle_request(request).await.unwrap();
+        let response = server.handle_request(request).await.unwrap().unwrap();
         assert!(response.error.is_none());
         assert!(response.result.is_some());
 
@@ -280,7 +281,7 @@ mod tests {
         let mut server = create_test_server();
         let request = JsonRpcRequest::new(3, "unknown/method", None);
 
-        let response = server.handle_request(request).await.unwrap();
+        let response = server.handle_request(request).await.unwrap().unwrap();
         assert!(response.result.is_none());
         assert!(response.error.is_some());
 
@@ -294,7 +295,7 @@ mod tests {
         let mut server = create_test_server();
         let request = JsonRpcRequest::new(4, "tools/call", None);
 
-        let response = server.handle_request(request).await.unwrap();
+        let response = server.handle_request(request).await.unwrap().unwrap();
         assert!(response.result.is_none());
         assert!(response.error.is_some());
 
@@ -307,7 +308,7 @@ mod tests {
         let mut server = create_test_server();
         let request = JsonRpcRequest::new(5, "tools/call", Some(serde_json::json!({})));
 
-        let response = server.handle_request(request).await.unwrap();
+        let response = server.handle_request(request).await.unwrap().unwrap();
         assert!(response.result.is_none());
         assert!(response.error.is_some());
 
@@ -325,7 +326,7 @@ mod tests {
             Some(serde_json::json!({"name": "unknown_tool"})),
         );
 
-        let response = server.handle_request(request).await.unwrap();
+        let response = server.handle_request(request).await.unwrap().unwrap();
         assert!(response.error.is_none());
         assert!(response.result.is_some());
 
@@ -342,11 +343,27 @@ mod tests {
             Some(serde_json::json!({"name": "list", "arguments": {}})),
         );
 
-        let response = server.handle_request(request).await.unwrap();
+        let response = server.handle_request(request).await.unwrap().unwrap();
         assert!(response.error.is_none());
         assert!(response.result.is_some());
 
         let result: CallToolResult = serde_json::from_value(response.result.unwrap()).unwrap();
         assert_eq!(result.is_error, Some(false)); // No servers configured, but not an error
+    }
+
+    #[tokio::test]
+    async fn test_handle_notification() {
+        let mut server = create_test_server();
+        // Create a notification (request without an ID)
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            method: "notifications/initialized".to_string(),
+            params: None,
+        };
+
+        let response = server.handle_request(request).await.unwrap();
+        // Notifications should not return a response
+        assert!(response.is_none());
     }
 }

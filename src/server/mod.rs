@@ -9,11 +9,10 @@ pub mod stdio;
 pub mod tools;
 
 pub use search::CachedTool;
-pub use stdio::run_server;
+pub use stdio::run;
 
-use crate::config::{Config, TransportConfig};
-use crate::mcp::client::McpClient;
-use crate::mcp::stdio::StdioClient;
+use crate::config::Config;
+use crate::mcp::client::{McpClient, create_client};
 use anyhow::Result;
 use lru::LruCache;
 use search::{IndexedSearch, ToolSearch};
@@ -126,7 +125,7 @@ pub struct GatewayServer {
     /// Lazy-loaded tool cache
     pub(crate) cache: ToolCache,
     /// Active connections to upstream servers
-    clients: HashMap<String, StdioClient>,
+    clients: HashMap<String, Box<dyn McpClient>>,
 }
 
 impl GatewayServer {
@@ -155,19 +154,8 @@ impl GatewayServer {
                 let span = debug_span!("upstream_init", server = %server_name);
                 let _enter = span.enter();
 
-                // Create client based on transport type
-                let mut client = match &server_config.transport {
-                    TransportConfig::Stdio { command, args, env } => {
-                        StdioClient::new(command.clone(), args.clone(), env.clone())
-                    }
-                    TransportConfig::Http { .. } => {
-                        // HTTP transport not yet implemented
-                        anyhow::bail!(
-                            "HTTP transport not yet supported for server '{}'",
-                            server_name
-                        );
-                    }
-                };
+                // Create client using factory function
+                let mut client = create_client(server_config)?;
 
                 // Initialize and get tools
                 client.initialize().await?;
@@ -194,40 +182,32 @@ impl GatewayServer {
     }
 
     /// Get or create a client for the given server
-    pub async fn get_or_create_client(&mut self, server_name: &str) -> Result<&mut StdioClient> {
-        async move {
-            // If client exists, return it
-            if self.clients.contains_key(server_name) {
-                return Ok(self.clients.get_mut(server_name).unwrap());
-            }
+    pub async fn get_or_create_client(
+        &mut self,
+        server_name: &str,
+    ) -> Result<&mut (dyn McpClient + '_)> {
+        let span = debug_span!("get_or_create_client", server = %server_name);
+        let _enter = span.enter();
 
-            // Get server config
-            let server_config = self.config.get_server(server_name).ok_or_else(|| {
-                anyhow::anyhow!("Server '{}' not found in configuration", server_name)
-            })?;
-
-            // Create new client
-            let mut client = match &server_config.transport {
-                TransportConfig::Stdio { command, args, env } => {
-                    StdioClient::new(command.clone(), args.clone(), env.clone())
-                }
-                TransportConfig::Http { .. } => {
-                    anyhow::bail!(
-                        "HTTP transport not yet supported for server '{}'",
-                        server_name
-                    );
-                }
-            };
-
-            // Initialize the client
-            client.initialize().await?;
-
-            // Store and return
-            self.clients.insert(server_name.to_string(), client);
-            Ok(self.clients.get_mut(server_name).unwrap())
+        // If client exists, return it
+        if self.clients.contains_key(server_name) {
+            return Ok(self.clients.get_mut(server_name).unwrap().as_mut());
         }
-        .instrument(debug_span!("get_or_create_client", server = %server_name))
-        .await
+
+        // Get server config
+        let server_config = self.config.get_server(server_name).ok_or_else(|| {
+            anyhow::anyhow!("Server '{}' not found in configuration", server_name)
+        })?;
+
+        // Create client using factory function
+        let mut client = create_client(server_config)?;
+
+        // Initialize the client
+        client.initialize().await?;
+
+        // Store and return
+        self.clients.insert(server_name.to_string(), client);
+        Ok(self.clients.get_mut(server_name).unwrap().as_mut())
     }
 
     /// Get the configuration

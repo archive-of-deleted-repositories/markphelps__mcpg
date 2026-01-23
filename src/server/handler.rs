@@ -1,6 +1,5 @@
 //! Request handlers for gateway tools
 
-use crate::mcp::client::McpClient;
 use crate::mcp::protocol::{CallToolResult, Content};
 use crate::server::GatewayServer;
 use anyhow::Result;
