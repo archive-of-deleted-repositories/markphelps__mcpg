@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
+use uuid::Uuid;
 
 /// Helper macro to skip tests if SKIP_INTEGRATION_TESTS is set
 macro_rules! skip_if_no_nodejs {
@@ -27,7 +28,6 @@ macro_rules! skip_if_no_nodejs {
 /// Gateway test client wrapping the mcpg process
 struct GatewayClient {
     process: Child,
-    request_id: i64,
 }
 
 impl GatewayClient {
@@ -53,16 +53,13 @@ impl GatewayClient {
         // Give process a moment to start
         std::thread::sleep(Duration::from_millis(1000));
 
-        Self {
-            process,
-            request_id: 0,
-        }
+        Self { process }
     }
 
     /// Send a JSON-RPC request and receive response
     fn send_request(&mut self, method: &str, params: Option<serde_json::Value>) -> JsonRpcResponse {
-        self.request_id += 1;
-        let request = JsonRpcRequest::new(self.request_id, method, params);
+        let request_id = Uuid::new_v4().to_string();
+        let request = JsonRpcRequest::new(request_id, method, params);
 
         // Write request
         let stdin = self.process.stdin.as_mut().unwrap();

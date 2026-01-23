@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tracing::{Instrument, debug, debug_span, info, info_span};
+use uuid::Uuid;
 
 /// Default timeout for read operations from upstream servers (30 seconds)
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -29,9 +29,6 @@ pub struct StdioClient {
     stdin: Option<ChildStdin>,
     stdout: Option<BufReader<ChildStdout>>,
 
-    // Request ID counter
-    next_id: AtomicI64,
-
     // Cached initialization result (also indicates if initialized)
     init_result: Option<InitializeResult>,
 }
@@ -50,7 +47,6 @@ impl StdioClient {
             child: None,
             stdin: None,
             stdout: None,
-            next_id: AtomicI64::new(1),
             init_result: None,
         }
     }
@@ -88,11 +84,11 @@ impl StdioClient {
         &mut self,
         method: &str,
         params: Option<serde_json::Value>,
-    ) -> Result<i64> {
-        let request_id = self.next_request_id();
+    ) -> Result<String> {
+        let request_id = Uuid::new_v4().to_string();
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: Some(request_id.into()),
+            id: Some(request_id.clone().into()),
             method: method.to_string(),
             params,
         };
@@ -153,11 +149,6 @@ impl StdioClient {
         }
 
         Err(anyhow::anyhow!("Stdout not available"))
-    }
-
-    /// Get the next request ID
-    fn next_request_id(&self) -> i64 {
-        self.next_id.fetch_add(1, Ordering::SeqCst)
     }
 }
 
@@ -321,15 +312,6 @@ mod tests {
     }
 
     #[test]
-    fn test_request_id_increment() {
-        let client = StdioClient::new("test".to_string(), None, None);
-        let id1 = client.next_request_id();
-        let id2 = client.next_request_id();
-        assert_eq!(id1, 1);
-        assert_eq!(id2, 2);
-    }
-
-    #[test]
     fn test_new_client_has_no_active_process() {
         let client = StdioClient::new("test".to_string(), None, None);
         assert!(client.child.is_none());
@@ -350,17 +332,6 @@ mod tests {
         env.insert("KEY".to_string(), "VALUE".to_string());
         let client = StdioClient::new("cmd".to_string(), None, Some(env.clone()));
         assert_eq!(client.env, Some(env));
-    }
-
-    #[test]
-    fn test_request_id_atomic_ordering() {
-        let client = StdioClient::new("test".to_string(), None, None);
-        // Test multiple increments
-        let ids: Vec<i64> = (0..10).map(|_| client.next_request_id()).collect();
-        // Verify sequential ordering
-        for i in 0..ids.len() - 1 {
-            assert_eq!(ids[i] + 1, ids[i + 1]);
-        }
     }
 
     #[tokio::test]
