@@ -2,3 +2,10 @@
 /node_modules
 docs/
 .claude
+
+# Personal MCP config (may contain secrets)
+mcp.local.json
+
+# Sandbox files (except .gitkeep)
+examples/sandbox/*
+!examples/sandbox/.gitkeep
