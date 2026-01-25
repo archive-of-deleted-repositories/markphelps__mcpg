@@ -1,6 +1,8 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use async_trait::async_trait;
+use std::time::Duration;
 
+use super::http::HttpClient;
 use super::protocol::{CallToolResult, InitializeResult, Tool};
 use super::stdio::StdioClient;
 use crate::config::{ServerConfig, TransportConfig};
@@ -40,17 +42,17 @@ pub trait McpClient {
 ///
 /// # Returns
 /// A boxed trait object implementing McpClient
-///
-/// # Errors
-/// Returns an error if HTTP transport is requested (not yet implemented)
 pub fn create_client(config: &ServerConfig) -> Result<Box<dyn McpClient>> {
+    let timeout = Duration::from_secs(config.timeout_secs);
+
     match &config.transport {
         TransportConfig::Stdio { command, args, env } => {
-            let client = StdioClient::new(command.clone(), args.clone(), env.clone());
+            let client = StdioClient::new(command.clone(), args.clone(), env.clone(), timeout);
             Ok(Box::new(client))
         }
-        TransportConfig::Http { .. } => {
-            bail!("HTTP transport is not yet implemented")
+        TransportConfig::Http { url, headers } => {
+            let client = HttpClient::new(url.clone(), headers.clone(), timeout)?;
+            Ok(Box::new(client))
         }
     }
 }
@@ -68,6 +70,7 @@ mod tests {
                 args: Some(vec!["@modelcontextprotocol/server-everything".to_string()]),
                 env: None,
             },
+            timeout_secs: 30,
         };
 
         let result = create_client(&config);
@@ -85,6 +88,7 @@ mod tests {
                 args: Some(vec!["mcp-server-fetch".to_string()]),
                 env: Some(env),
             },
+            timeout_secs: 30,
         };
 
         let result = create_client(&config);
@@ -99,6 +103,7 @@ mod tests {
                 args: None,
                 env: None,
             },
+            timeout_secs: 30,
         };
 
         let result = create_client(&config);
@@ -106,21 +111,17 @@ mod tests {
     }
 
     #[test]
-    fn test_create_client_http_not_implemented() {
+    fn test_create_client_http_implemented() {
         let config = ServerConfig {
             transport: TransportConfig::Http {
-                url: "http://localhost:8080".to_string(),
+                url: "http://localhost:8080/mcp".to_string(),
                 headers: None,
             },
+            timeout_secs: 30,
         };
 
         let result = create_client(&config);
-        assert!(result.is_err());
-        let err = result.err().unwrap();
-        assert!(
-            err.to_string()
-                .contains("HTTP transport is not yet implemented")
-        );
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -130,17 +131,13 @@ mod tests {
 
         let config = ServerConfig {
             transport: TransportConfig::Http {
-                url: "https://api.example.com".to_string(),
+                url: "https://api.example.com/mcp".to_string(),
                 headers: Some(headers),
             },
+            timeout_secs: 60,
         };
 
         let result = create_client(&config);
-        assert!(result.is_err());
-        let err = result.err().unwrap();
-        assert!(
-            err.to_string()
-                .contains("HTTP transport is not yet implemented")
-        );
+        assert!(result.is_ok());
     }
 }

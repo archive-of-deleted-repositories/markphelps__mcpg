@@ -7,13 +7,11 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 use tracing::{Instrument, debug, debug_span, info, info_span};
 use uuid::Uuid;
 
-/// Default timeout for read operations from upstream servers (30 seconds)
-const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
-
 use super::client::McpClient;
 use super::protocol::{
     CallToolParams, CallToolResult, ClientCapabilities, ClientInfo, InitializeParams,
-    InitializeResult, JsonRpcRequest, JsonRpcResponse, ListToolsResult, PROTOCOL_VERSION, Tool,
+    InitializeResult, JsonRpcRequest, JsonRpcResponse, ListToolsResult, McpMethod, McpNotification,
+    PROTOCOL_VERSION, Tool,
 };
 
 /// MCP client that communicates via stdio (stdin/stdout)
@@ -31,6 +29,9 @@ pub struct StdioClient {
 
     // Cached initialization result (also indicates if initialized)
     init_result: Option<InitializeResult>,
+
+    // Timeout for read operations
+    timeout: Duration,
 }
 
 impl StdioClient {
@@ -39,6 +40,7 @@ impl StdioClient {
         command: String,
         args: Option<Vec<String>>,
         env: Option<HashMap<String, String>>,
+        timeout: Duration,
     ) -> Self {
         Self {
             command,
@@ -48,6 +50,7 @@ impl StdioClient {
             stdin: None,
             stdout: None,
             init_result: None,
+            timeout,
         }
     }
 
@@ -130,7 +133,7 @@ impl StdioClient {
     async fn read_response(&mut self) -> Result<JsonRpcResponse> {
         let mut line = String::new();
         if let Some(stdout) = &mut self.stdout {
-            tokio::time::timeout(DEFAULT_READ_TIMEOUT, stdout.read_line(&mut line))
+            tokio::time::timeout(self.timeout, stdout.read_line(&mut line))
                 .await
                 .context("Timeout reading response from upstream server")?
                 .context("Failed to read response from upstream server")?;
@@ -174,7 +177,8 @@ impl McpClient for StdioClient {
                 capabilities: ClientCapabilities::default(),
             })?;
 
-            self.send_request("initialize", Some(params)).await?;
+            self.send_request(McpMethod::Initialize.as_str(), Some(params))
+                .await?;
             let response = self.read_response().await?;
             let init_result: InitializeResult = serde_json::from_value(
                 response
@@ -187,7 +191,7 @@ impl McpClient for StdioClient {
 
             // Send notifications/initialized to signal that initialization is complete
             // This is a notification (no ID) not a request
-            self.send_notification("notifications/initialized", None)
+            self.send_notification(McpNotification::Initialized.as_str(), None)
                 .await?;
 
             Ok(init_result)
@@ -202,7 +206,8 @@ impl McpClient for StdioClient {
                 self.initialize().await?;
             }
 
-            self.send_request("tools/list", None).await?;
+            self.send_request(McpMethod::ToolsList.as_str(), None)
+                .await?;
             let response = self.read_response().await?;
             let list_tools_result: ListToolsResult = serde_json::from_value(
                 response
@@ -242,7 +247,8 @@ impl McpClient for StdioClient {
             let params = serde_json::to_value(tool_params)?;
 
             // Send the tools/call request
-            self.send_request("tools/call", Some(params)).await?;
+            self.send_request(McpMethod::ToolsCall.as_str(), Some(params))
+                .await?;
 
             // Read the response
             let response = self.read_response().await?;
@@ -306,6 +312,7 @@ mod tests {
             "test-command".to_string(),
             Some(vec!["arg1".to_string()]),
             None,
+            Duration::from_secs(30),
         );
         assert_eq!(client.command, "test-command");
         assert!(client.init_result.is_none());
@@ -313,7 +320,7 @@ mod tests {
 
     #[test]
     fn test_new_client_has_no_active_process() {
-        let client = StdioClient::new("test".to_string(), None, None);
+        let client = StdioClient::new("test".to_string(), None, None, Duration::from_secs(30));
         assert!(client.child.is_none());
         assert!(client.stdin.is_none());
         assert!(client.stdout.is_none());
@@ -322,7 +329,12 @@ mod tests {
     #[test]
     fn test_client_with_args() {
         let args = vec!["--flag".to_string(), "value".to_string()];
-        let client = StdioClient::new("cmd".to_string(), Some(args.clone()), None);
+        let client = StdioClient::new(
+            "cmd".to_string(),
+            Some(args.clone()),
+            None,
+            Duration::from_secs(30),
+        );
         assert_eq!(client.args, Some(args));
     }
 
@@ -330,7 +342,12 @@ mod tests {
     fn test_client_with_env() {
         let mut env = HashMap::new();
         env.insert("KEY".to_string(), "VALUE".to_string());
-        let client = StdioClient::new("cmd".to_string(), None, Some(env.clone()));
+        let client = StdioClient::new(
+            "cmd".to_string(),
+            None,
+            Some(env.clone()),
+            Duration::from_secs(30),
+        );
         assert_eq!(client.env, Some(env));
     }
 
@@ -338,7 +355,7 @@ mod tests {
     async fn test_initialize_caches_result() {
         // This test would need a mock server to be complete
         // For now, we test the caching logic path
-        let mut client = StdioClient::new("echo".to_string(), None, None);
+        let mut client = StdioClient::new("echo".to_string(), None, None, Duration::from_secs(30));
 
         // Simulate already initialized state
         let mock_result = InitializeResult {
@@ -359,7 +376,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown_clears_state() {
-        let mut client = StdioClient::new("test".to_string(), None, None);
+        let mut client = StdioClient::new("test".to_string(), None, None, Duration::from_secs(30));
 
         // Set some state
         let mock_result = InitializeResult {
@@ -388,6 +405,7 @@ mod tests {
             "nonexistent-command-that-does-not-exist-12345".to_string(),
             None,
             None,
+            Duration::from_secs(30),
         );
         let result = client.spawn();
         assert!(result.is_err());
@@ -396,7 +414,7 @@ mod tests {
     #[tokio::test]
     async fn test_double_spawn_returns_error() {
         // Use a real command that exists on all systems
-        let mut client = StdioClient::new("cat".to_string(), None, None);
+        let mut client = StdioClient::new("cat".to_string(), None, None, Duration::from_secs(30));
 
         // First spawn should succeed
         let result1 = client.spawn();
@@ -414,7 +432,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_request_without_stdin_returns_error() {
-        let mut client = StdioClient::new("test".to_string(), None, None);
+        let mut client = StdioClient::new("test".to_string(), None, None, Duration::from_secs(30));
         // Don't spawn - stdin is None
 
         let result = client.send_request("test/method", None).await;
@@ -429,7 +447,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_response_without_stdout_returns_error() {
-        let mut client = StdioClient::new("test".to_string(), None, None);
+        let mut client = StdioClient::new("test".to_string(), None, None, Duration::from_secs(30));
         // Don't spawn - stdout is None
 
         let result = client.read_response().await;
@@ -444,7 +462,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_notification_without_stdin_returns_error() {
-        let mut client = StdioClient::new("test".to_string(), None, None);
+        let mut client = StdioClient::new("test".to_string(), None, None, Duration::from_secs(30));
         // Don't spawn - stdin is None
 
         let result = client.send_notification("test/notification", None).await;

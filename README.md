@@ -29,10 +29,10 @@ Traditional MCP integration loads all tool schemas at startup:
 
 - ✅ MCP server implementation (stdio transport)
 - ✅ Progressive tool discovery via search/inspect/call
-- ✅ Upstream MCP client for stdio servers
+- ✅ Upstream MCP client for stdio and HTTP servers
 - ✅ Universal configuration layer
 - ✅ Automatic process lifecycle management
-- 🚧 HTTP transport for upstream servers (planned)
+- ✅ HTTP transport for upstream servers
 - 🚧 BM25 search ranking (planned)
 - 🚧 Resources and prompts (planned)
 
@@ -156,6 +156,58 @@ mcpg looks for configuration in the following order:
   }
 }
 ```
+
+## Transport Types
+
+mcpg supports two transport types for connecting to upstream MCP servers:
+
+### Stdio Transport
+
+Runs MCP servers as local subprocesses communicating over stdin/stdout.
+
+```json
+{
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "./data"],
+      "env": {
+        "API_KEY": "optional-env-var"
+      },
+      "timeout_secs": 30
+    }
+  }
+}
+```
+
+### HTTP Transport
+
+Connects to remote MCP servers over HTTP using the Streamable HTTP protocol (MCP 2025-06-18).
+
+```json
+{
+  "servers": {
+    "remote-api": {
+      "url": "https://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY"
+      },
+      "timeout_secs": 60
+    }
+  }
+}
+```
+
+**Configuration Options:**
+- `timeout_secs` (optional): Request timeout in seconds (default: 30)
+- `headers` (optional): Custom HTTP headers to send with each request
+- `url`: The MCP endpoint URL (must support Streamable HTTP)
+
+**Protocol Details:**
+- Uses MCP Streamable HTTP specification (2025-06-18)
+- Single endpoint for all operations (POST to URL)
+- Session management via `Mcp-Session-Id` header
+- No server-initiated messages in v1 (GET SSE stream not implemented)
 
 ## Testing
 

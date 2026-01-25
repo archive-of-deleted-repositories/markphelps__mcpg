@@ -280,6 +280,7 @@ mod tests {
                     args: None,
                     env: None,
                 },
+                timeout_secs: 30,
             },
         );
 

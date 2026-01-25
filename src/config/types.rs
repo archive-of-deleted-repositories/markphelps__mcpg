@@ -19,6 +19,16 @@ pub struct ServerConfig {
     /// The transport-specific configuration (stdio or HTTP)
     #[serde(flatten)]
     pub transport: TransportConfig,
+
+    /// Timeout in seconds for operations (default: 30)
+    /// - For stdio: timeout reading from stdout
+    /// - For HTTP: timeout for HTTP requests
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_timeout() -> u64 {
+    30
 }
 
 /// Transport-specific configuration
@@ -97,6 +107,7 @@ mod tests {
                     "test-key".to_string(),
                 )])),
             },
+            timeout_secs: 30,
         };
 
         assert!(config.validate().is_ok());
@@ -110,6 +121,7 @@ mod tests {
                 args: None,
                 env: None,
             },
+            timeout_secs: 30,
         };
 
         let result = config.validate();
@@ -125,6 +137,7 @@ mod tests {
                 args: None,
                 env: None,
             },
+            timeout_secs: 30,
         };
 
         let result = config.validate();
@@ -142,6 +155,7 @@ mod tests {
                     "Bearer token".to_string(),
                 )])),
             },
+            timeout_secs: 30,
         };
 
         assert!(config.validate().is_ok());
@@ -154,6 +168,7 @@ mod tests {
                 url: "".to_string(),
                 headers: None,
             },
+            timeout_secs: 30,
         };
 
         let result = config.validate();
@@ -168,6 +183,7 @@ mod tests {
                 url: "   ".to_string(),
                 headers: None,
             },
+            timeout_secs: 30,
         };
 
         let result = config.validate();
@@ -186,6 +202,7 @@ mod tests {
                     args: None,
                     env: None,
                 },
+                timeout_secs: 30,
             },
         );
 
@@ -206,6 +223,7 @@ mod tests {
                     args: None,
                     env: None,
                 },
+                timeout_secs: 30,
             },
         );
         servers.insert(
@@ -215,6 +233,7 @@ mod tests {
                     url: "http://localhost".to_string(),
                     headers: None,
                 },
+                timeout_secs: 30,
             },
         );
 
@@ -234,6 +253,7 @@ mod tests {
                 args: Some(vec!["server".to_string()]),
                 env: Some(HashMap::from([("KEY".to_string(), "value".to_string())])),
             },
+            timeout_secs: 30,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -259,6 +279,7 @@ mod tests {
                     "Bearer token".to_string(),
                 )])),
             },
+            timeout_secs: 30,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -300,5 +321,19 @@ mod tests {
             }
             _ => panic!("Expected Http transport"),
         }
+    }
+
+    #[test]
+    fn test_server_config_default_timeout() {
+        let json = r#"{"command":"npx"}"#;
+        let config: ServerConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.timeout_secs, 30);
+    }
+
+    #[test]
+    fn test_server_config_custom_timeout() {
+        let json = r#"{"command":"npx","timeout_secs":60}"#;
+        let config: ServerConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.timeout_secs, 60);
     }
 }

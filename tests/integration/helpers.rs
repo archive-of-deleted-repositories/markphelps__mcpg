@@ -19,6 +19,7 @@
 use anyhow::Result;
 use std::env;
 use std::sync::Once;
+use std::time::Duration;
 
 static INIT: Once = Once::new();
 
@@ -55,6 +56,7 @@ pub fn create_everything_client() -> mcpg::mcp::stdio::StdioClient {
             "@modelcontextprotocol/server-everything".to_string(),
         ]),
         None,
+        Duration::from_secs(30),
     )
 }
 
@@ -64,7 +66,7 @@ pub fn create_test_client(
     args: Option<Vec<String>>,
 ) -> mcpg::mcp::stdio::StdioClient {
     use mcpg::mcp::stdio::StdioClient;
-    StdioClient::new(command, args, None)
+    StdioClient::new(command, args, None, Duration::from_secs(30))
 }
 
 /// Initialize client and verify successful connection

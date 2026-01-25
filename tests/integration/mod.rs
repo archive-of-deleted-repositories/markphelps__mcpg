@@ -10,4 +10,5 @@
 
 mod gateway_tests;
 mod helpers;
+mod http_tests;
 mod stdio_tests;

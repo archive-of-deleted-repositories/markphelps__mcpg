@@ -3,6 +3,50 @@ use serde_json::Value;
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
+/// MCP request methods
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpMethod {
+    Initialize,
+    ToolsList,
+    ToolsCall,
+}
+
+impl McpMethod {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Initialize => "initialize",
+            Self::ToolsList => "tools/list",
+            Self::ToolsCall => "tools/call",
+        }
+    }
+}
+
+impl From<McpMethod> for String {
+    fn from(method: McpMethod) -> String {
+        method.as_str().to_string()
+    }
+}
+
+/// MCP notifications
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpNotification {
+    Initialized,
+}
+
+impl McpNotification {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Initialized => "notifications/initialized",
+        }
+    }
+}
+
+impl From<McpNotification> for String {
+    fn from(notification: McpNotification) -> String {
+        notification.as_str().to_string()
+    }
+}
+
 /// JSON-RPC 2.0 Request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
@@ -271,7 +315,11 @@ mod tests {
 
     #[test]
     fn test_jsonrpc_request_serialization() {
-        let request = JsonRpcRequest::new(1, "initialize", Some(serde_json::json!({})));
+        let request = JsonRpcRequest::new(
+            1,
+            McpMethod::Initialize.as_str(),
+            Some(serde_json::json!({})),
+        );
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains(r#""jsonrpc":"2.0""#));
         assert!(json.contains(r#""method":"initialize""#));
@@ -388,5 +436,35 @@ mod tests {
         let json = serde_json::to_string(&content).unwrap();
         assert!(json.contains(r#""type":"image""#));
         assert!(json.contains(r#""mimeType":"image/png""#));
+    }
+
+    #[test]
+    fn test_mcp_method_as_str() {
+        assert_eq!(McpMethod::Initialize.as_str(), "initialize");
+        assert_eq!(McpMethod::ToolsList.as_str(), "tools/list");
+        assert_eq!(McpMethod::ToolsCall.as_str(), "tools/call");
+    }
+
+    #[test]
+    fn test_mcp_method_to_string() {
+        assert_eq!(String::from(McpMethod::Initialize), "initialize");
+        assert_eq!(String::from(McpMethod::ToolsList), "tools/list");
+        assert_eq!(String::from(McpMethod::ToolsCall), "tools/call");
+    }
+
+    #[test]
+    fn test_mcp_notification_as_str() {
+        assert_eq!(
+            McpNotification::Initialized.as_str(),
+            "notifications/initialized"
+        );
+    }
+
+    #[test]
+    fn test_mcp_notification_to_string() {
+        assert_eq!(
+            String::from(McpNotification::Initialized),
+            "notifications/initialized"
+        );
     }
 }

@@ -141,6 +141,7 @@ fn create_test_config() -> Config {
                 ]),
                 env: None,
             },
+            timeout_secs: 30,
         },
     );
 

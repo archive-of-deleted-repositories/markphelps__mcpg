@@ -90,3 +90,5 @@ jobs:
 
       - name: Run integration tests
         run: cargo test --test integration -- --test-threads=1
+        env:
+          RUST_LOG: debug
