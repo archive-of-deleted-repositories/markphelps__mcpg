@@ -151,6 +151,25 @@ impl ClaudeCodeAgent {
         })
     }
 
+    /// Find the project key in a user-level config, handling trailing slash variants.
+    ///
+    /// Returns the matching key if the project is found, or the canonical key
+    /// (without trailing slash) for creating new entries.
+    fn find_project_key(project_path: &Path, projects: &HashMap<String, ProjectSettings>) -> String {
+        let project_key = project_path.to_string_lossy().to_string();
+
+        if projects.contains_key(&project_key) {
+            return project_key;
+        }
+
+        let with_slash = format!("{}/", project_key);
+        if projects.contains_key(&with_slash) {
+            return with_slash;
+        }
+
+        project_key
+    }
+
     /// Load servers from a single config file based on its level
     fn load_servers_from_source(
         &self,
@@ -178,30 +197,14 @@ impl ClaudeCodeAgent {
                     format!("Failed to parse user config: {}", source.path.display())
                 })?;
 
-                let project_key = project_path.to_string_lossy().to_string();
+                let key = Self::find_project_key(project_path, &config.projects);
 
-                // Try exact match first
-                if let Some(project_settings) = config.projects.get(&project_key) {
+                if let Some(project_settings) = config.projects.get(&key) {
                     debug!(
                         source = %source.path.display(),
-                        project = %project_key,
+                        project = %key,
                         servers = project_settings.mcp_servers.len(),
                         "Found project in user-level config"
-                    );
-                    return Ok((
-                        project_settings.mcp_servers.clone(),
-                        project_settings.disabled_mcp_servers.clone(),
-                    ));
-                }
-
-                // Try with trailing slash
-                let project_key_with_slash = format!("{}/", project_key);
-                if let Some(project_settings) = config.projects.get(&project_key_with_slash) {
-                    debug!(
-                        source = %source.path.display(),
-                        project = %project_key_with_slash,
-                        servers = project_settings.mcp_servers.len(),
-                        "Found project in user-level config (with slash)"
                     );
                     return Ok((
                         project_settings.mcp_servers.clone(),
@@ -214,7 +217,7 @@ impl ClaudeCodeAgent {
                     trace!(
                         source = %source.path.display(),
                         available_projects = ?config.projects.keys().collect::<Vec<_>>(),
-                        looking_for = %project_key,
+                        looking_for = %key,
                         "Project not found in user-level config"
                     );
                 }
@@ -224,10 +227,72 @@ impl ClaudeCodeAgent {
         }
     }
 
-    /// Get the preferred config file for writing mcpg config
-    /// This is .mcp.json in the project directory (project-scoped, version controlled)
-    fn preferred_config_path(&self, project_path: &Path) -> PathBuf {
-        project_path.join(".mcp.json")
+    /// Update a config file to disable servers and optionally add mcpg
+    fn update_config_file(
+        &self,
+        source_path: &Path,
+        level: &ConfigLevel,
+        project_path: &Path,
+        servers_to_disable: &[String],
+        add_mcpg: bool,
+    ) -> Result<()> {
+        match level {
+            ConfigLevel::Project => {
+                let config_file = ConfigFile::<ProjectLevelConfig>::new(source_path.to_path_buf());
+                config_file.create_backup()?;
+                let mut config = config_file.load()?;
+
+                // Disable the specified servers
+                for server in servers_to_disable {
+                    if !config.disabled_mcp_servers.contains(server) {
+                        config.disabled_mcp_servers.push(server.clone());
+                    }
+                }
+
+                // Add mcpg if requested
+                if add_mcpg && !config.mcp_servers.contains_key("mcpg") {
+                    config.mcp_servers.insert("mcpg".to_string(), Self::mcpg_server_config());
+                }
+
+                config_file.save(&config)
+            }
+            ConfigLevel::User => {
+                let config_file = ConfigFile::<UserLevelConfig>::new(source_path.to_path_buf());
+                config_file.create_backup()?;
+                let mut config = config_file.load()?;
+
+                let key_to_use = Self::find_project_key(project_path, &config.projects);
+                let project_settings = config.projects.entry(key_to_use).or_default();
+
+                // Disable the specified servers
+                for server in servers_to_disable {
+                    if !project_settings.disabled_mcp_servers.contains(server) {
+                        project_settings.disabled_mcp_servers.push(server.clone());
+                    }
+                }
+
+                // Add mcpg if requested
+                if add_mcpg && !project_settings.mcp_servers.contains_key("mcpg") {
+                    project_settings
+                        .mcp_servers
+                        .insert("mcpg".to_string(), Self::mcpg_server_config());
+                }
+
+                config_file.save(&config)
+            }
+        }
+    }
+
+    /// Create the mcpg server configuration
+    fn mcpg_server_config() -> ClaudeMcpServer {
+        ClaudeMcpServer {
+            transport_type: "stdio".to_string(),
+            command: Some("mcpg".to_string()),
+            args: Some(vec![]),
+            env: None,
+            url: None,
+            headers: None,
+        }
     }
 }
 
@@ -351,53 +416,52 @@ impl Agent for ClaudeCodeAgent {
             }
         }
 
-        // Update each source file
-        for (source_path, servers_to_disable_in_source) in &sources_to_update {
-            let config_file = ConfigFile::<ProjectLevelConfig>::new(source_path.clone());
+        let sources_with_level = self.config_sources_with_level(project_path);
 
-            // Create backup before modifying
-            config_file.create_backup()?;
-
-            let mut config = config_file.load()?;
-
-            // Disable the specified servers
-            for server in servers_to_disable_in_source {
-                if !config.disabled_mcp_servers.contains(server) {
-                    config.disabled_mcp_servers.push(server.clone());
-                }
-            }
-
-            config_file.save(&config)?;
-        }
-
-        // Add mcpg to the preferred config (project-scoped .mcp.json)
-        let preferred_path = self.preferred_config_path(project_path);
-        let config_file = ConfigFile::<ProjectLevelConfig>::new(preferred_path.clone());
-
-        let mut config = if config_file.exists() {
-            // Backup existing file before modifying
-            config_file.create_backup()?;
-            config_file.load()?
+        // Determine the highest priority source to add mcpg to:
+        // - If there are servers to disable, use the highest priority source with servers
+        // - Otherwise, use the highest priority existing config file
+        let mcpg_target_source = if !sources_to_update.is_empty() {
+            sources_with_level
+                .iter()
+                .find(|s| sources_to_update.contains_key(&s.path))
+                .cloned()
         } else {
-            ProjectLevelConfig::default()
+            // No servers to disable - find the first existing config file
+            sources_with_level.iter().find(|s| s.path.exists()).cloned()
         };
 
-        // Add mcpg if not present
-        if !config.mcp_servers.contains_key("mcpg") {
-            config.mcp_servers.insert(
-                "mcpg".to_string(),
-                ClaudeMcpServer {
-                    transport_type: "stdio".to_string(),
-                    command: Some("mcpg".to_string()),
-                    args: Some(vec![]),
-                    env: None,
-                    url: None,
-                    headers: None,
-                },
-            );
+        // Update each source file - disable servers and add mcpg to highest priority source
+        for (source_path, servers_to_disable_in_source) in &sources_to_update {
+            // Determine the config level for this source
+            let source_level = sources_with_level
+                .iter()
+                .find(|s| s.path == *source_path)
+                .map(|s| s.level)
+                .unwrap_or(ConfigLevel::Project);
+
+            let should_add_mcpg = mcpg_target_source
+                .as_ref()
+                .map(|s| s.path == *source_path)
+                .unwrap_or(false);
+
+            self.update_config_file(
+                source_path,
+                &source_level,
+                project_path,
+                servers_to_disable_in_source,
+                should_add_mcpg,
+            )?;
         }
 
-        config_file.save(&config)
+        // If no servers were disabled but we have a target for mcpg, add it there
+        if sources_to_update.is_empty()
+            && let Some(target) = mcpg_target_source
+        {
+            self.update_config_file(&target.path, &target.level, project_path, &[], true)?;
+        }
+
+        Ok(())
     }
 
     fn mcpg_configured_at(&self, project_path: &Path) -> Option<PathBuf> {
@@ -585,22 +649,22 @@ mod tests {
     #[test]
     fn test_mcpg_configured_at_returns_path_after_apply_changes() {
         let temp_dir = TempDir::new().unwrap();
-        create_test_config_file(temp_dir.path());
+        let config_path = create_test_config_file(temp_dir.path());
 
         let agent = ClaudeCodeAgent::new();
 
         // Before apply_changes, mcpg is not configured
         assert!(agent.mcpg_configured_at(temp_dir.path()).is_none());
 
-        // Apply changes adds mcpg
+        // Apply changes adds mcpg to the same file where servers were found
         agent
             .apply_changes(temp_dir.path(), &["github".to_string()])
             .unwrap();
 
-        // After apply_changes, mcpg is configured at .mcp.json
+        // After apply_changes, mcpg is configured at the same source file
         let configured_at = agent.mcpg_configured_at(temp_dir.path());
         assert!(configured_at.is_some());
-        assert_eq!(configured_at.unwrap(), temp_dir.path().join(".mcp.json"));
+        assert_eq!(configured_at.unwrap(), config_path);
     }
 
     #[test]

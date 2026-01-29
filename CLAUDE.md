@@ -34,8 +34,8 @@ The `init` command bootstraps mcpg for a project by:
 1. Detecting AI agent configurations (currently Claude Code)
 2. Reading MCP servers from all config sources
 3. Creating `.mcpg.json` with upstream server configs
-4. Adding mcpg to the agent's config (`.mcp.json`)
-5. Optionally disabling migrated servers in their source configs
+4. Adding mcpg to the agent's config (in the same file where servers are defined)
+5. Disabling migrated servers in their source configs (via `disabledMcpServers`)
 
 ## Build & Test Commands
 

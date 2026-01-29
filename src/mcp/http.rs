@@ -352,6 +352,7 @@ mod tests {
                 name: "test".to_string(),
                 version: "1.0.0".to_string(),
             },
+            instructions: None,
         });
 
         // Shutdown should clear everything

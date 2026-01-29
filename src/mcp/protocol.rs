@@ -163,6 +163,9 @@ pub struct InitializeResult {
     pub server_info: ServerInfo,
     /// Server capabilities
     pub capabilities: ServerCapabilities,
+    /// Instructions describing how to use the server
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 /// Information about the MCP server

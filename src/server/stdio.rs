@@ -12,6 +12,18 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{Instrument, error, info_span};
 
+/// Instructions sent to the AI agent explaining how to use the mcpg gateway.
+const GATEWAY_INSTRUCTIONS: &str = "\
+mcpg is a gateway to upstream MCP servers. Instead of connecting to each server directly, \
+use these tools to discover and call tools on upstream servers:
+
+1. search(query) - Find tools by keyword across all servers. Start here when you need a tool.
+2. inspect(server, tool) - Get the full schema and parameters for a specific tool before calling it.
+3. call(server, tool, args) - Execute a tool on an upstream server.
+4. list(server?) - List all available servers, or list tools on a specific server.
+
+Workflow: search -> inspect -> call. Always inspect a tool before calling it to understand its parameters.";
+
 impl GatewayServer {
     /// Handle a single JSON-RPC request
     ///
@@ -67,6 +79,7 @@ impl GatewayServer {
                     list_changed: Some(false),
                 }),
             },
+            instructions: Some(GATEWAY_INSTRUCTIONS.to_string()),
         };
 
         Ok(JsonRpcResponse {

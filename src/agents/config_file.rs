@@ -26,6 +26,7 @@ where
     }
 
     /// Check if the config file exists
+    #[allow(dead_code)]
     pub fn exists(&self) -> bool {
         self.path().exists()
     }

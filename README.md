@@ -38,9 +38,34 @@ Traditional MCP integration loads all tool schemas at startup:
 
 ## Quick Start
 
-### 1. Configure upstream servers
+The fastest way to get started is with `mcpg init`, which automatically detects your AI agent's MCP servers and configures mcpg as a gateway.
 
-Create `mcp.json` in your project directory:
+### 1. Run `mcpg init`
+
+```bash
+# Interactive setup - detects your agent and migrates servers
+mcpg init
+
+# Or skip prompts and select all servers
+mcpg init --yes
+```
+
+This will:
+1. Detect your AI agent configuration (currently supports Claude Code)
+2. Show you all configured MCP servers across your config files
+3. Let you select which servers to route through mcpg
+4. Create `.mcpg.json` with your upstream server configs
+5. Update your agent's config to use mcpg instead of the individual servers
+
+### 2. Restart your AI agent
+
+After init completes, restart your AI agent (e.g., restart Claude Code). The agent will now connect to mcpg and see 4 gateway tools instead of all upstream tools.
+
+### Manual Setup
+
+If you prefer to configure manually:
+
+1. Create `.mcpg.json` in your project directory:
 
 ```json
 {
@@ -57,16 +82,17 @@ Create `mcp.json` in your project directory:
 }
 ```
 
-### 2. Run mcpg
+2. Point your AI agent's MCP config to mcpg:
 
-```bash
-# mcpg reads from stdin and writes to stdout (MCP stdio transport)
-cargo run
+```json
+{
+  "mcpServers": {
+    "mcpg": {
+      "command": "mcpg"
+    }
+  }
+}
 ```
-
-### 3. Connect your AI agent
-
-Configure your AI agent to use mcpg as its MCP server. The agent will see 4 gateway tools instead of all upstream tools.
 
 ## Gateway Tools
 
@@ -133,13 +159,43 @@ echo '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call","arg
 
 See `docs/examples/gateway-demo.sh` for a complete working demo.
 
+## CLI Commands
+
+```bash
+# Run the gateway server (default command)
+mcpg
+mcpg serve
+
+# Initialize mcpg for a project
+mcpg init
+
+# Init options
+mcpg init --dry-run    # Preview changes without writing files
+mcpg init --yes        # Skip prompts, select all servers
+mcpg init -y           # Short form of --yes
+mcpg -v init           # Verbose debug output
+```
+
+### `mcpg init`
+
+The `init` command bootstraps mcpg for a project by:
+
+1. **Detecting your AI agent** - Finds supported agent configurations in the current project (currently Claude Code)
+2. **Discovering MCP servers** - Reads servers from all agent config sources, tracking which file each came from
+3. **Server selection** - Interactive multi-select to choose which servers to route through mcpg (or `--yes` to select all)
+4. **Creating `.mcpg.json`** - Writes the gateway config with your selected upstream servers
+5. **Updating agent config** - Adds mcpg to your agent's MCP config and disables the migrated servers via `disabledMcpServers`
+6. **Creating backups** - Backs up any modified config files (`.backup` extension)
+
+After running `init`, restart your AI agent for changes to take effect.
+
 ## Configuration
 
-mcpg looks for configuration in the following order:
+mcpg looks for its gateway configuration in the following order:
 
 1. `$MCPG_CONFIG` environment variable
-2. `./mcp.json` (project directory)
-3. `~/.config/mcp/servers.json` (user config)
+2. `./.mcpg.json` (project directory)
+3. `~/.config/mcpg/config.json` (XDG user config)
 
 ### Config Format
 
@@ -209,6 +265,24 @@ Connects to remote MCP servers over HTTP using the Streamable HTTP protocol (MCP
 - Session management via `Mcp-Session-Id` header
 - No server-initiated messages in v1 (GET SSE stream not implemented)
 
+## Supported Agents
+
+### Claude Code
+
+`mcpg init` detects and migrates servers from Claude Code's config files, checked in priority order:
+
+**Project-scoped:**
+1. `.mcp.json`
+2. `.claude/settings.local.json`
+
+**User-scoped:**
+3. `~/.claude/settings.local.json`
+4. `~/.claude/settings.json`
+5. `~/.claude.json`
+6. `~/.claude/mcp_servers.json`
+
+When migrating, mcpg adds itself to the highest-priority config source that contains servers, and disables the migrated servers via `disabledMcpServers` in each source file.
+
 ## Testing
 
 ### Prerequisites
@@ -226,6 +300,9 @@ cargo test --lib --bins
 
 # Integration tests only
 cargo test --test integration
+
+# CLI integration tests
+cargo test --test cli
 
 # Skip integration tests (if Node.js not available)
 SKIP_INTEGRATION_TESTS=1 cargo test

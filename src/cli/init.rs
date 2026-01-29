@@ -217,11 +217,6 @@ fn show_plan(plan: &InitPlan) -> Result<()> {
 
     println!();
 
-    // Agent config changes
-    let mcp_json_path = plan.project_path.join(".mcp.json");
-    println!("{}: {}", style::key("Will modify"), mcp_json_path.display());
-    println!("{}", style::addition("Add mcpg as MCP server"));
-
     // Group servers by source for cleaner display
     let mut servers_by_source: HashMap<PathBuf, Vec<String>> = HashMap::new();
     for name in &plan.selected_servers {
@@ -233,25 +228,59 @@ fn show_plan(plan: &InitPlan) -> Result<()> {
         }
     }
 
+    // Determine which file mcpg will be added to
+    // (highest priority source with servers, or first existing config)
+    let mcpg_target = if !servers_by_source.is_empty() {
+        // Find the highest priority source that has servers
+        plan.agent
+            .config_sources(&plan.project_path)
+            .into_iter()
+            .find(|p| servers_by_source.contains_key(p))
+    } else {
+        // No servers - find the first existing config file
+        plan.agent
+            .config_sources(&plan.project_path)
+            .into_iter()
+            .find(|p| p.exists())
+    };
+
+    // Show agent config changes
+    if let Some(target_path) = &mcpg_target {
+        println!("{}: {}", style::key("Will modify"), target_path.display());
+        println!("{}", style::addition("Add mcpg as MCP server"));
+
+        // Show servers being disabled in this file (if any)
+        if let Some(server_names) = servers_by_source.get(target_path) {
+            println!(
+                "{}",
+                style::addition(&format!("Disable: {}", server_names.join(", ")))
+            );
+        }
+    }
+
+    // Show other source files being modified (servers disabled in other files)
     for (source, server_names) in &servers_by_source {
-        let source_display = source
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| source.display().to_string());
+        // Skip the main target file (already shown above)
+        if mcpg_target.as_ref() == Some(source) {
+            continue;
+        }
+        println!("{}: {}", style::key("Will modify"), source.display());
         println!(
             "{}",
-            style::addition(&format!(
-                "Disable in {}: {}",
-                source_display,
-                server_names.join(", ")
-            ))
+            style::addition(&format!("Disable: {}", server_names.join(", ")))
         );
     }
 
     println!();
 
-    // Backup info
-    for source in servers_by_source.keys() {
+    // Backup info - include all files that will be modified
+    let mut files_to_backup: Vec<&PathBuf> = servers_by_source.keys().collect();
+    if let Some(target) = &mcpg_target
+        && !files_to_backup.contains(&target)
+    {
+        files_to_backup.push(target);
+    }
+    for source in &files_to_backup {
         println!("{}: {}.backup", style::key("Will backup"), source.display());
     }
 

@@ -365,6 +365,7 @@ mod tests {
                 name: "test".to_string(),
                 version: "1.0.0".to_string(),
             },
+            instructions: None,
         };
         client.init_result = Some(mock_result.clone());
 
@@ -386,6 +387,7 @@ mod tests {
                 name: "test".to_string(),
                 version: "1.0.0".to_string(),
             },
+            instructions: None,
         };
         client.init_result = Some(mock_result);
 
