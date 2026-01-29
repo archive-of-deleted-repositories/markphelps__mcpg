@@ -35,10 +35,15 @@ fn default_timeout() -> u64 {
 ///
 /// This enum is flattened when serializing/deserializing JSON,
 /// so the fields appear directly in the ServerConfig object.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+///
+/// When serializing, the `type` field is always included.
+/// When deserializing, the `type` field is optional and will be inferred:
+/// - If `command` is present, it's stdio
+/// - If `url` is present, it's http
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum TransportConfig {
-    /// Stdio transport: runs a subprocessc
+    /// Stdio transport: runs a subprocess
     Stdio {
         /// The executable to run (e.g., "uvx", "npx")
         command: String,
@@ -57,6 +62,61 @@ pub enum TransportConfig {
         #[serde(skip_serializing_if = "Option::is_none")]
         headers: Option<HashMap<String, String>>,
     },
+}
+
+impl<'de> Deserialize<'de> for TransportConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+        use serde_json::Value;
+
+        let mut value = Value::deserialize(deserializer)?;
+
+        // If type field is missing, infer it from the fields present
+        if let Value::Object(ref mut map) = value
+            && !map.contains_key("type")
+        {
+            let inferred_type = if map.contains_key("command") {
+                "stdio"
+            } else if map.contains_key("url") {
+                "http"
+            } else {
+                return Err(D::Error::custom(
+                    "Cannot infer transport type: must have either 'command' or 'url' field",
+                ));
+            };
+            map.insert("type".to_string(), Value::String(inferred_type.to_string()));
+        }
+
+        // Now deserialize with the type field present
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "lowercase")]
+        enum TransportConfigHelper {
+            Stdio {
+                command: String,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                args: Option<Vec<String>>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                env: Option<HashMap<String, String>>,
+            },
+            Http {
+                url: String,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                headers: Option<HashMap<String, String>>,
+            },
+        }
+
+        let helper = TransportConfigHelper::deserialize(value).map_err(D::Error::custom)?;
+
+        Ok(match helper {
+            TransportConfigHelper::Stdio { command, args, env } => {
+                TransportConfig::Stdio { command, args, env }
+            }
+            TransportConfigHelper::Http { url, headers } => TransportConfig::Http { url, headers },
+        })
+    }
 }
 
 impl ServerConfig {
@@ -335,5 +395,60 @@ mod tests {
         let json = r#"{"command":"npx","timeout_secs":60}"#;
         let config: ServerConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.timeout_secs, 60);
+    }
+
+    #[test]
+    fn test_stdio_config_with_explicit_type() {
+        let json = r#"{"type":"stdio","command":"npx","args":["server"]}"#;
+        let config: ServerConfig = serde_json::from_str(json).unwrap();
+
+        match config.transport {
+            TransportConfig::Stdio { command, args, env } => {
+                assert_eq!(command, "npx");
+                assert_eq!(args, Some(vec!["server".to_string()]));
+                assert_eq!(env, None);
+            }
+            _ => panic!("Expected Stdio transport"),
+        }
+    }
+
+    #[test]
+    fn test_http_config_with_explicit_type() {
+        let json = r#"{"type":"http","url":"http://localhost:8080"}"#;
+        let config: ServerConfig = serde_json::from_str(json).unwrap();
+
+        match config.transport {
+            TransportConfig::Http { url, headers } => {
+                assert_eq!(url, "http://localhost:8080");
+                assert_eq!(headers, None);
+            }
+            _ => panic!("Expected Http transport"),
+        }
+    }
+
+    #[test]
+    fn test_serialization_includes_type_field() {
+        let stdio_config = ServerConfig {
+            transport: TransportConfig::Stdio {
+                command: "npx".to_string(),
+                args: Some(vec!["server".to_string()]),
+                env: None,
+            },
+            timeout_secs: 30,
+        };
+
+        let json = serde_json::to_string(&stdio_config).unwrap();
+        assert!(json.contains(r#""type":"stdio""#));
+
+        let http_config = ServerConfig {
+            transport: TransportConfig::Http {
+                url: "http://localhost:8080".to_string(),
+                headers: None,
+            },
+            timeout_secs: 30,
+        };
+
+        let json = serde_json::to_string(&http_config).unwrap();
+        assert!(json.contains(r#""type":"http""#));
     }
 }

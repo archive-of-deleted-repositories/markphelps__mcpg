@@ -10,6 +10,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Current Status**: MCP Gateway Server fully implemented with search/inspect/call/list tools. Includes reverse-index search, LRU caching, and comprehensive test coverage.
 
+## CLI Commands
+
+```bash
+# Run gateway server (default command)
+mcpg
+mcpg serve
+
+# Initialize mcpg for current project (interactive)
+mcpg init
+
+# Initialize with options
+mcpg init --dry-run    # Show what would change without writing
+mcpg init --yes        # Skip confirmation prompts
+mcpg init -y           # Short form of --yes
+mcpg init --verbose    # Show debug output
+mcpg -v init           # Verbose flag is global
+```
+
+### Init Command
+
+The `init` command bootstraps mcpg for a project by:
+1. Detecting AI agent configurations (currently Claude Code)
+2. Reading MCP servers from all config sources
+3. Creating `.mcpg.json` with upstream server configs
+4. Adding mcpg to the agent's config (`.mcp.json`)
+5. Optionally disabling migrated servers in their source configs
+
 ## Build & Test Commands
 
 ```bash
@@ -24,6 +51,9 @@ cargo test --lib --bins
 
 # Integration tests only (requires Node.js 18+)
 cargo test --test integration
+
+# CLI integration tests
+cargo test --test cli
 
 # Skip integration tests when Node.js unavailable
 SKIP_INTEGRATION_TESTS=1 cargo test
@@ -73,8 +103,17 @@ Setup: `npm install` (installs husky)
 
 ```
 src/
-├── main.rs           # MCP server entry point (stdio)
+├── main.rs           # Entry point, CLI dispatch
 ├── lib.rs            # Library exports
+├── cli/              # CLI commands
+│   ├── mod.rs        # Clap CLI definitions
+│   ├── init.rs       # Init command implementation
+│   └── style.rs      # Terminal styling utilities
+├── agents/           # AI agent configuration management
+│   ├── mod.rs        # Agent trait, discovery
+│   ├── claude_code.rs # Claude Code agent implementation
+│   ├── config_file.rs # Generic JSON config file helper
+│   └── registry.rs   # Agent registration system
 ├── server/           # MCP server implementation
 │   ├── mod.rs        # GatewayServer, ToolCache
 │   ├── handler.rs    # Request handlers (search/inspect/call/list)
@@ -102,11 +141,26 @@ src/
 - **StdioClient**: Spawns subprocess, JSON-RPC over stdin/stdout
 - **TransportConfig**: `Stdio { command, args, env }` or `Http { url, headers }`
 
+**Agent System (for init command)**:
+- **Agent trait**: Interface for AI agent config management
+- **ClaudeCodeAgent**: Reads/writes Claude Code MCP configs
+- **ConfigLevel**: Project vs User scoped configs
+- **ServerWithSource**: Tracks which config file each server came from
+
+### Claude Code Config Sources (priority order, highest first)
+
+1. `.mcp.json` (project directory)
+2. `.claude/settings.local.json` (project directory)
+3. `~/.claude/settings.local.json` (user home)
+4. `~/.claude/settings.json` (user home)
+5. `~/.claude.json` (user home)
+6. `~/.claude/mcp_servers.json` (user home)
+
 ### Config Discovery Order
 
 1. `$MCPG_CONFIG` environment variable
-2. `./mcp.json` (project-level)
-3. `~/.config/mcp/servers.json` (XDG user-level)
+2. `./.mcpg.json` (project-level)
+3. `~/.config/mcpg/config.json` (XDG user-level)
 
 ## Testing
 

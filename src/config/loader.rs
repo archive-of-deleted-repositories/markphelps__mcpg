@@ -23,7 +23,7 @@ impl fmt::Display for ConfigSource {
 }
 
 const MCPG_CONFIG_VAR: &str = "MCPG_CONFIG";
-const PROJECT_MCP_CONFIG_FILE: &str = "mcp.json";
+const PROJECT_CONFIG_FILE: &str = ".mcpg.json";
 
 impl super::Config {
     pub fn load(path: Option<PathBuf>) -> Result<super::Config> {
@@ -46,7 +46,7 @@ impl super::Config {
 
         // 3. Check project directory
         if let Ok(current_dir) = std::env::current_dir() {
-            let project_path = current_dir.join(PROJECT_MCP_CONFIG_FILE);
+            let project_path = current_dir.join(PROJECT_CONFIG_FILE);
             if project_path.exists() {
                 let config = from_file(&project_path)?;
                 let source = ConfigSource::Project(project_path);
@@ -58,8 +58,8 @@ impl super::Config {
         // 4. Fallback to user config
         let user_config_path = dirs::config_dir()
             .context("Could not determine user config directory")?
-            .join("mcp")
-            .join("servers.json");
+            .join("mcpg")
+            .join("config.json");
         if user_config_path.exists() {
             let config = from_file(&user_config_path)?;
             let source = ConfigSource::User(user_config_path);
@@ -192,7 +192,7 @@ mod tests {
         let original_dir = std::env::current_dir().unwrap();
 
         let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join(PROJECT_MCP_CONFIG_FILE);
+        let config_path = temp_dir.path().join(PROJECT_CONFIG_FILE);
         fs::write(&config_path, create_test_config_json()).unwrap();
 
         // Change to temp directory
@@ -270,7 +270,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         // Create project config
-        let project_path = temp_dir.path().join(PROJECT_MCP_CONFIG_FILE);
+        let project_path = temp_dir.path().join(PROJECT_CONFIG_FILE);
         fs::write(
             &project_path,
             r#"{

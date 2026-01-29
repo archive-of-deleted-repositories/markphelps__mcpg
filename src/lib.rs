@@ -3,6 +3,7 @@
 //! This library provides a client implementation for the Model Context Protocol,
 //! supporting stdio and http transport for communicating with MCP servers.
 
+pub mod agents;
 pub mod config;
 pub mod mcp;
 pub mod server;
