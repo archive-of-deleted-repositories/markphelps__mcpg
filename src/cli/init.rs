@@ -1,7 +1,7 @@
 use super::InitArgs;
 use super::style;
 use crate::agents::{self, Agent, ServerWithSource};
-use crate::config::{Config, ServerConfig, TransportConfig};
+use crate::config::{Config, PROJECT_CONFIG_FILE, ServerConfig, TransportConfig};
 use anyhow::{Context, Result, bail};
 use console::Term;
 use dialoguer::{Confirm, MultiSelect};
@@ -178,7 +178,7 @@ fn show_plan(plan: &InitPlan) -> Result<()> {
     println!();
 
     // .mcpg.json changes (mcpg gateway config)
-    let mcpg_config_path = plan.project_path.join(".mcpg.json");
+    let mcpg_config_path = plan.project_path.join(PROJECT_CONFIG_FILE);
     let mcpg_config_exists = mcpg_config_path.exists();
 
     if mcpg_config_exists {
@@ -305,10 +305,12 @@ fn describe_server(server: &ServerConfig) -> String {
 }
 
 fn execute_plan(plan: &InitPlan) -> Result<()> {
-    // Check for existing .mcpg.json
-    let mcpg_config_path = plan.project_path.join(".mcpg.json");
+    let mcpg_config_path = plan.project_path.join(PROJECT_CONFIG_FILE);
     if mcpg_config_path.exists() {
-        println!("{}", style::warning("Overwriting existing .mcpg.json"));
+        println!(
+            "{}",
+            style::warning(&format!("Overwriting existing {}", PROJECT_CONFIG_FILE))
+        );
     }
 
     // Build the new config with just the ServerConfig (not ServerWithSource)
@@ -324,8 +326,8 @@ fn execute_plan(plan: &InitPlan) -> Result<()> {
     };
 
     // Write .mcpg.json
-    let config_json =
-        serde_json::to_string_pretty(&new_config).context("Failed to serialize .mcpg.json")?;
+    let config_json = serde_json::to_string_pretty(&new_config)
+        .context(format!("Failed to serialize {}", PROJECT_CONFIG_FILE))?;
     fs::write(&mcpg_config_path, config_json)
         .with_context(|| format!("Failed to write {}", mcpg_config_path.display()))?;
     println!(
@@ -347,11 +349,7 @@ fn execute_plan(plan: &InitPlan) -> Result<()> {
     println!();
     println!("Restart Claude Code to use mcpg.");
     println!();
-    println!(
-        "{}",
-        style::dim("Note: Ensure 'mcpg' is in your PATH, or update .mcp.json")
-    );
-    println!("{}", style::dim("to use the full path to the mcpg binary."));
+    println!("{}", style::dim("Note: Ensure 'mcpg' is in your PATH"));
 
     Ok(())
 }

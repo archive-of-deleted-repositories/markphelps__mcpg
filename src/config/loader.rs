@@ -23,7 +23,9 @@ impl fmt::Display for ConfigSource {
 }
 
 const MCPG_CONFIG_VAR: &str = "MCPG_CONFIG";
-const PROJECT_CONFIG_FILE: &str = ".mcpg.json";
+
+/// The filename for the mcpg gateway configuration file.
+pub const PROJECT_CONFIG_FILE: &str = ".mcpg.json";
 
 impl super::Config {
     pub fn load(path: Option<PathBuf>) -> Result<super::Config> {

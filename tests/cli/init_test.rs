@@ -1,5 +1,6 @@
 //! Integration tests for the `mcpg init` command
 
+use mcpg::config::PROJECT_CONFIG_FILE;
 use std::fs;
 use std::process::Command;
 use tempfile::TempDir;
@@ -74,8 +75,9 @@ fn test_init_dry_run_creates_no_files() {
 
     // Should NOT create .mcpg.json
     assert!(
-        !project_path.join(".mcpg.json").exists(),
-        "Dry run should not create .mcpg.json"
+        !project_path.join(PROJECT_CONFIG_FILE).exists(),
+        "Dry run should not create {}",
+        PROJECT_CONFIG_FILE
     );
 }
 
@@ -116,15 +118,17 @@ fn test_init_creates_mcpg_config() {
 
     // Should create .mcpg.json
     assert!(
-        project_path.join(".mcpg.json").exists(),
-        ".mcpg.json should be created"
+        project_path.join(PROJECT_CONFIG_FILE).exists(),
+        "{} should be created",
+        PROJECT_CONFIG_FILE
     );
 
     // Verify .mcpg.json contains the server
-    let mcpg_config = fs::read_to_string(project_path.join(".mcpg.json")).unwrap();
+    let mcpg_config = fs::read_to_string(project_path.join(PROJECT_CONFIG_FILE)).unwrap();
     assert!(
         mcpg_config.contains("test-server"),
-        ".mcpg.json should contain test-server"
+        "{} should contain test-server",
+        PROJECT_CONFIG_FILE
     );
 }
 
