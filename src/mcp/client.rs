@@ -3,7 +3,9 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 use super::http::HttpClient;
-use super::protocol::{CallToolResult, InitializeResult, Tool};
+use super::protocol::{
+    CallToolResult, GetPromptResult, InitializeResult, Prompt, ReadResourceResult, Resource, Tool,
+};
 use super::stdio::StdioClient;
 use crate::config::{ServerConfig, TransportConfig};
 
@@ -30,6 +32,22 @@ pub trait McpClient {
     /// * `name` - The name of the tool to call
     /// * `args` - The arguments as a JSON value
     async fn call_tool(&mut self, name: &str, args: serde_json::Value) -> Result<CallToolResult>;
+
+    /// List all available resources from the server
+    async fn list_resources(&mut self) -> Result<Vec<Resource>>;
+
+    /// Read a resource by URI
+    async fn read_resource(&mut self, uri: &str) -> Result<ReadResourceResult>;
+
+    /// List all available prompts from the server
+    async fn list_prompts(&mut self) -> Result<Vec<Prompt>>;
+
+    /// Get a prompt by name with optional arguments
+    async fn get_prompt(
+        &mut self,
+        name: &str,
+        arguments: Option<serde_json::Value>,
+    ) -> Result<GetPromptResult>;
 
     /// Shutdown the connection gracefully
     async fn shutdown(&mut self) -> Result<()>;

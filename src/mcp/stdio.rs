@@ -9,9 +9,10 @@ use uuid::Uuid;
 
 use super::client::McpClient;
 use super::protocol::{
-    CallToolParams, CallToolResult, ClientCapabilities, ClientInfo, InitializeParams,
-    InitializeResult, JsonRpcRequest, JsonRpcResponse, ListToolsResult, MAX_PAGINATION_PAGES,
-    McpMethod, McpNotification, PROTOCOL_VERSION, Tool,
+    CallToolParams, CallToolResult, ClientCapabilities, ClientInfo, GetPromptResult,
+    InitializeParams, InitializeResult, JsonRpcRequest, JsonRpcResponse, ListPromptsResult,
+    ListResourcesResult, ListToolsResult, MAX_PAGINATION_PAGES, McpMethod, McpNotification,
+    PROTOCOL_VERSION, Prompt, ReadResourceResult, Resource, Tool,
 };
 
 /// MCP client that communicates via stdio (stdin/stdout)
@@ -290,6 +291,176 @@ impl McpClient for StdioClient {
             )?;
 
             Ok(call_result)
+        }
+        .instrument(span)
+        .await
+    }
+
+    async fn list_resources(&mut self) -> Result<Vec<Resource>> {
+        async move {
+            if self.init_result.is_none() {
+                self.initialize().await?;
+            }
+
+            let mut all_resources = Vec::new();
+            let mut cursor: Option<String> = None;
+
+            for page in 0..MAX_PAGINATION_PAGES {
+                let params = cursor.as_ref().map(|c| serde_json::json!({ "cursor": c }));
+
+                self.send_request(McpMethod::ResourcesList.as_str(), params)
+                    .await?;
+                let response = self.read_response().await?;
+                let result: ListResourcesResult = serde_json::from_value(
+                    response
+                        .result
+                        .ok_or_else(|| anyhow::anyhow!("No result in resources/list response"))?,
+                )?;
+
+                debug!(
+                    page = page,
+                    count = result.resources.len(),
+                    has_next = result.next_cursor.is_some(),
+                    "Received resources page from upstream"
+                );
+
+                all_resources.extend(result.resources);
+
+                match result.next_cursor {
+                    Some(next) => cursor = Some(next),
+                    None => {
+                        cursor = None;
+                        break;
+                    }
+                }
+            }
+
+            if cursor.is_some() {
+                anyhow::bail!(
+                    "Exceeded maximum pagination limit of {} pages while listing resources",
+                    MAX_PAGINATION_PAGES
+                );
+            }
+
+            debug!(
+                count = all_resources.len(),
+                "Listed resources from upstream"
+            );
+            Ok(all_resources)
+        }
+        .instrument(debug_span!("upstream_list_resources"))
+        .await
+    }
+
+    async fn read_resource(&mut self, uri: &str) -> Result<ReadResourceResult> {
+        let resource_uri = uri.to_string();
+        let span = debug_span!("upstream_read_resource", uri = %resource_uri);
+
+        async move {
+            if self.init_result.is_none() {
+                self.initialize().await?;
+            }
+
+            let params = serde_json::json!({ "uri": resource_uri });
+            self.send_request(McpMethod::ResourcesRead.as_str(), Some(params))
+                .await?;
+            let response = self.read_response().await?;
+            let result: ReadResourceResult = serde_json::from_value(
+                response
+                    .result
+                    .ok_or_else(|| anyhow::anyhow!("No result in resources/read response"))?,
+            )?;
+
+            Ok(result)
+        }
+        .instrument(span)
+        .await
+    }
+
+    async fn list_prompts(&mut self) -> Result<Vec<Prompt>> {
+        async move {
+            if self.init_result.is_none() {
+                self.initialize().await?;
+            }
+
+            let mut all_prompts = Vec::new();
+            let mut cursor: Option<String> = None;
+
+            for page in 0..MAX_PAGINATION_PAGES {
+                let params = cursor.as_ref().map(|c| serde_json::json!({ "cursor": c }));
+
+                self.send_request(McpMethod::PromptsList.as_str(), params)
+                    .await?;
+                let response = self.read_response().await?;
+                let result: ListPromptsResult = serde_json::from_value(
+                    response
+                        .result
+                        .ok_or_else(|| anyhow::anyhow!("No result in prompts/list response"))?,
+                )?;
+
+                debug!(
+                    page = page,
+                    count = result.prompts.len(),
+                    has_next = result.next_cursor.is_some(),
+                    "Received prompts page from upstream"
+                );
+
+                all_prompts.extend(result.prompts);
+
+                match result.next_cursor {
+                    Some(next) => cursor = Some(next),
+                    None => {
+                        cursor = None;
+                        break;
+                    }
+                }
+            }
+
+            if cursor.is_some() {
+                anyhow::bail!(
+                    "Exceeded maximum pagination limit of {} pages while listing prompts",
+                    MAX_PAGINATION_PAGES
+                );
+            }
+
+            debug!(count = all_prompts.len(), "Listed prompts from upstream");
+            Ok(all_prompts)
+        }
+        .instrument(debug_span!("upstream_list_prompts"))
+        .await
+    }
+
+    async fn get_prompt(
+        &mut self,
+        name: &str,
+        arguments: Option<serde_json::Value>,
+    ) -> Result<GetPromptResult> {
+        let prompt_name = name.to_string();
+        let span = debug_span!("upstream_get_prompt", prompt = %prompt_name);
+
+        async move {
+            if self.init_result.is_none() {
+                self.initialize().await?;
+            }
+
+            let mut params = serde_json::json!({ "name": prompt_name });
+            if let Some(args) = arguments {
+                params
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("arguments".to_string(), args);
+            }
+
+            self.send_request(McpMethod::PromptsGet.as_str(), Some(params))
+                .await?;
+            let response = self.read_response().await?;
+            let result: GetPromptResult = serde_json::from_value(
+                response
+                    .result
+                    .ok_or_else(|| anyhow::anyhow!("No result in prompts/get response"))?,
+            )?;
+
+            Ok(result)
         }
         .instrument(span)
         .await

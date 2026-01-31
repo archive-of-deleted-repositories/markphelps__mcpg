@@ -5,8 +5,9 @@
 use super::helpers::should_skip_integration_tests;
 use mcpg::config::{Config, ServerConfig, TransportConfig};
 use mcpg::mcp::protocol::{
-    CallToolParams, CallToolResult, Content, InitializeParams, InitializeResult, JsonRpcRequest,
-    JsonRpcResponse, ListToolsResult, PROTOCOL_VERSION,
+    CallToolParams, CallToolResult, Content, GetPromptResult, InitializeParams, InitializeResult,
+    JsonRpcRequest, JsonRpcResponse, ListPromptsResult, ListResourcesResult, ListToolsResult,
+    PROTOCOL_VERSION, ReadResourceResult,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -100,6 +101,53 @@ impl GatewayClient {
         assert!(
             response.error.is_none(),
             "List tools failed: {:?}",
+            response.error
+        );
+        serde_json::from_value(response.result.unwrap()).unwrap()
+    }
+
+    fn list_resources(&mut self) -> ListResourcesResult {
+        let response = self.send_request("resources/list", None);
+        assert!(
+            response.error.is_none(),
+            "List resources failed: {:?}",
+            response.error
+        );
+        serde_json::from_value(response.result.unwrap()).unwrap()
+    }
+
+    fn read_resource(&mut self, uri: &str) -> ReadResourceResult {
+        let response = self.send_request("resources/read", Some(json!({"uri": uri})));
+        assert!(
+            response.error.is_none(),
+            "Read resource failed: {:?}",
+            response.error
+        );
+        serde_json::from_value(response.result.unwrap()).unwrap()
+    }
+
+    fn list_prompts(&mut self) -> ListPromptsResult {
+        let response = self.send_request("prompts/list", None);
+        assert!(
+            response.error.is_none(),
+            "List prompts failed: {:?}",
+            response.error
+        );
+        serde_json::from_value(response.result.unwrap()).unwrap()
+    }
+
+    fn get_prompt(&mut self, name: &str, arguments: Option<serde_json::Value>) -> GetPromptResult {
+        let mut params = json!({"name": name});
+        if let Some(args) = arguments {
+            params
+                .as_object_mut()
+                .unwrap()
+                .insert("arguments".to_string(), args);
+        }
+        let response = self.send_request("prompts/get", Some(params));
+        assert!(
+            response.error.is_none(),
+            "Get prompt failed: {:?}",
             response.error
         );
         serde_json::from_value(response.result.unwrap()).unwrap()
@@ -347,4 +395,93 @@ fn test_gateway_error_handling_nonexistent_server() {
     } else {
         panic!("Expected text content");
     }
+}
+
+#[test]
+fn test_gateway_initialize_advertises_capabilities() {
+    skip_if_no_nodejs!();
+
+    let config = create_test_config();
+    let mut client = GatewayClient::spawn(config);
+
+    let result = client.initialize();
+    assert!(result.capabilities.tools.is_some());
+    assert!(result.capabilities.resources.is_some());
+    assert!(result.capabilities.prompts.is_some());
+}
+
+#[test]
+fn test_gateway_list_resources() {
+    skip_if_no_nodejs!();
+
+    let config = create_test_config();
+    let mut client = GatewayClient::spawn(config);
+
+    client.initialize();
+    let result = client.list_resources();
+
+    // The everything server exposes resources
+    assert!(
+        !result.resources.is_empty(),
+        "Everything server should expose resources"
+    );
+    assert!(result.next_cursor.is_none());
+}
+
+#[test]
+fn test_gateway_read_resource() {
+    skip_if_no_nodejs!();
+
+    let config = create_test_config();
+    let mut client = GatewayClient::spawn(config);
+
+    client.initialize();
+    let resources = client.list_resources();
+    assert!(
+        !resources.resources.is_empty(),
+        "Need at least one resource to test read"
+    );
+
+    // Read the first resource
+    let uri = &resources.resources[0].uri;
+    let result = client.read_resource(uri);
+    assert!(!result.contents.is_empty(), "Resource should have contents");
+}
+
+#[test]
+fn test_gateway_list_prompts() {
+    skip_if_no_nodejs!();
+
+    let config = create_test_config();
+    let mut client = GatewayClient::spawn(config);
+
+    client.initialize();
+    let result = client.list_prompts();
+
+    // The everything server exposes prompts
+    assert!(
+        !result.prompts.is_empty(),
+        "Everything server should expose prompts"
+    );
+    assert!(result.next_cursor.is_none());
+}
+
+#[test]
+fn test_gateway_get_prompt() {
+    skip_if_no_nodejs!();
+
+    let config = create_test_config();
+    let mut client = GatewayClient::spawn(config);
+
+    client.initialize();
+    let prompts = client.list_prompts();
+    assert!(
+        !prompts.prompts.is_empty(),
+        "Need at least one prompt to test get"
+    );
+
+    // Get the first prompt
+    let name = &prompts.prompts[0].name;
+    let result = client.get_prompt(name, None);
+    assert!(!result.messages.is_empty(), "Prompt should have messages");
 }

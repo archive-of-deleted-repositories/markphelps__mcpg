@@ -9,9 +9,10 @@ use uuid::Uuid;
 use super::client::McpClient;
 use super::error::McpError;
 use super::protocol::{
-    CallToolParams, CallToolResult, ClientCapabilities, ClientInfo, InitializeParams,
-    InitializeResult, JsonRpcRequest, JsonRpcResponse, ListToolsResult, MAX_PAGINATION_PAGES,
-    McpMethod, McpNotification, PROTOCOL_VERSION, Tool,
+    CallToolParams, CallToolResult, ClientCapabilities, ClientInfo, GetPromptResult,
+    InitializeParams, InitializeResult, JsonRpcRequest, JsonRpcResponse, ListPromptsResult,
+    ListResourcesResult, ListToolsResult, MAX_PAGINATION_PAGES, McpMethod, McpNotification,
+    PROTOCOL_VERSION, Prompt, ReadResourceResult, Resource, Tool,
 };
 
 /// MCP client that communicates via HTTP (Streamable HTTP transport)
@@ -291,6 +292,150 @@ impl McpClient for HttpClient {
             .map_err(McpError::Serialization)?;
 
         Ok(call_result)
+    }
+
+    async fn list_resources(&mut self) -> Result<Vec<Resource>> {
+        if self.init_result.is_none() {
+            self.initialize().await?;
+        }
+
+        let mut all_resources = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        for page in 0..MAX_PAGINATION_PAGES {
+            let params = cursor.as_ref().map(|c| serde_json::json!({ "cursor": c }));
+
+            let response = self
+                .send_request(McpMethod::ResourcesList.as_str(), params)
+                .await?;
+            let result: ListResourcesResult =
+                serde_json::from_value(response.result.ok_or_else(|| {
+                    McpError::Other(anyhow::anyhow!("No result in resources/list response"))
+                })?)
+                .map_err(McpError::Serialization)?;
+
+            debug!(
+                page = page,
+                count = result.resources.len(),
+                has_next = result.next_cursor.is_some(),
+                "Received resources page from upstream"
+            );
+
+            all_resources.extend(result.resources);
+
+            match result.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => {
+                    cursor = None;
+                    break;
+                }
+            }
+        }
+
+        if cursor.is_some() {
+            return Err(McpError::Other(anyhow::anyhow!(
+                "Exceeded maximum pagination limit of {} pages while listing resources",
+                MAX_PAGINATION_PAGES
+            ))
+            .into());
+        }
+
+        Ok(all_resources)
+    }
+
+    async fn read_resource(&mut self, uri: &str) -> Result<ReadResourceResult> {
+        if self.init_result.is_none() {
+            self.initialize().await?;
+        }
+
+        let params = serde_json::json!({ "uri": uri });
+        let response = self
+            .send_request(McpMethod::ResourcesRead.as_str(), Some(params))
+            .await?;
+        let result: ReadResourceResult =
+            serde_json::from_value(response.result.ok_or_else(|| {
+                McpError::Other(anyhow::anyhow!("No result in resources/read response"))
+            })?)
+            .map_err(McpError::Serialization)?;
+
+        Ok(result)
+    }
+
+    async fn list_prompts(&mut self) -> Result<Vec<Prompt>> {
+        if self.init_result.is_none() {
+            self.initialize().await?;
+        }
+
+        let mut all_prompts = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        for page in 0..MAX_PAGINATION_PAGES {
+            let params = cursor.as_ref().map(|c| serde_json::json!({ "cursor": c }));
+
+            let response = self
+                .send_request(McpMethod::PromptsList.as_str(), params)
+                .await?;
+            let result: ListPromptsResult =
+                serde_json::from_value(response.result.ok_or_else(|| {
+                    McpError::Other(anyhow::anyhow!("No result in prompts/list response"))
+                })?)
+                .map_err(McpError::Serialization)?;
+
+            debug!(
+                page = page,
+                count = result.prompts.len(),
+                has_next = result.next_cursor.is_some(),
+                "Received prompts page from upstream"
+            );
+
+            all_prompts.extend(result.prompts);
+
+            match result.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => {
+                    cursor = None;
+                    break;
+                }
+            }
+        }
+
+        if cursor.is_some() {
+            return Err(McpError::Other(anyhow::anyhow!(
+                "Exceeded maximum pagination limit of {} pages while listing prompts",
+                MAX_PAGINATION_PAGES
+            ))
+            .into());
+        }
+
+        Ok(all_prompts)
+    }
+
+    async fn get_prompt(
+        &mut self,
+        name: &str,
+        arguments: Option<serde_json::Value>,
+    ) -> Result<GetPromptResult> {
+        if self.init_result.is_none() {
+            self.initialize().await?;
+        }
+
+        let mut params = serde_json::json!({ "name": name });
+        if let Some(args) = arguments {
+            params
+                .as_object_mut()
+                .unwrap()
+                .insert("arguments".to_string(), args);
+        }
+
+        let response = self
+            .send_request(McpMethod::PromptsGet.as_str(), Some(params))
+            .await?;
+        let result: GetPromptResult = serde_json::from_value(response.result.ok_or_else(|| {
+            McpError::Other(anyhow::anyhow!("No result in prompts/get response"))
+        })?)
+        .map_err(McpError::Serialization)?;
+
+        Ok(result)
     }
 
     async fn shutdown(&mut self) -> Result<()> {
@@ -1395,5 +1540,283 @@ mod tests {
 
         // Verify we actually hit the limit
         assert_eq!(page_count.load(Ordering::SeqCst), MAX_PAGINATION_PAGES);
+    }
+
+    #[tokio::test]
+    async fn test_list_resources_pagination() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wiremock::matchers::{body_partial_json, header, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // Mock initialize
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "initialize" }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0", "id": "test-id",
+                        "result": {
+                            "protocolVersion": PROTOCOL_VERSION,
+                            "capabilities": { "resources": {} },
+                            "serverInfo": { "name": "test", "version": "1.0.0" }
+                        }
+                    }))
+                    .insert_header("Mcp-Session-Id", "test-session"),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "notifications/initialized" }),
+            ))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Mock resources/list with 2 pages
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count_clone = call_count.clone();
+
+        Mock::given(method("POST"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "resources/list" }),
+            ))
+            .respond_with(move |_req: &wiremock::Request| {
+                let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
+                if count == 0 {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0", "id": "test-id",
+                        "result": {
+                            "resources": [
+                                { "uri": "file:///a.txt", "name": "a.txt" },
+                                { "uri": "file:///b.txt", "name": "b.txt" }
+                            ],
+                            "nextCursor": "page2"
+                        }
+                    }))
+                } else {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0", "id": "test-id",
+                        "result": {
+                            "resources": [
+                                { "uri": "file:///c.txt", "name": "c.txt" }
+                            ]
+                        }
+                    }))
+                }
+            })
+            .expect(2)
+            .mount(&mock_server)
+            .await;
+
+        let mut client = HttpClient::new(mock_server.uri(), None, Duration::from_secs(30)).unwrap();
+        let resources = client.list_resources().await.unwrap();
+        assert_eq!(resources.len(), 3);
+        assert_eq!(resources[0].uri, "file:///a.txt");
+        assert_eq!(resources[2].uri, "file:///c.txt");
+    }
+
+    #[tokio::test]
+    async fn test_read_resource() {
+        use wiremock::matchers::{body_partial_json, header, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // Mock initialize
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "initialize" }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0", "id": "test-id",
+                        "result": {
+                            "protocolVersion": PROTOCOL_VERSION,
+                            "capabilities": { "resources": {} },
+                            "serverInfo": { "name": "test", "version": "1.0.0" }
+                        }
+                    }))
+                    .insert_header("Mcp-Session-Id", "test-session"),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "notifications/initialized" }),
+            ))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Mock resources/read
+        Mock::given(method("POST"))
+            .and(body_partial_json(serde_json::json!({ "method": "resources/read" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": "test-id",
+                "result": {
+                    "contents": [{ "uri": "file:///test.txt", "mimeType": "text/plain", "text": "hello world" }]
+                }
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let mut client = HttpClient::new(mock_server.uri(), None, Duration::from_secs(30)).unwrap();
+        let result = client.read_resource("file:///test.txt").await.unwrap();
+        assert_eq!(result.contents.len(), 1);
+        assert_eq!(result.contents[0].text, Some("hello world".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_list_prompts_pagination() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wiremock::matchers::{body_partial_json, header, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "initialize" }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0", "id": "test-id",
+                        "result": {
+                            "protocolVersion": PROTOCOL_VERSION,
+                            "capabilities": { "prompts": {} },
+                            "serverInfo": { "name": "test", "version": "1.0.0" }
+                        }
+                    }))
+                    .insert_header("Mcp-Session-Id", "test-session"),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "notifications/initialized" }),
+            ))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count_clone = call_count.clone();
+
+        Mock::given(method("POST"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "prompts/list" }),
+            ))
+            .respond_with(move |_req: &wiremock::Request| {
+                let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
+                if count == 0 {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0", "id": "test-id",
+                        "result": {
+                            "prompts": [{ "name": "prompt1" }, { "name": "prompt2" }],
+                            "nextCursor": "page2"
+                        }
+                    }))
+                } else {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0", "id": "test-id",
+                        "result": { "prompts": [{ "name": "prompt3" }] }
+                    }))
+                }
+            })
+            .expect(2)
+            .mount(&mock_server)
+            .await;
+
+        let mut client = HttpClient::new(mock_server.uri(), None, Duration::from_secs(30)).unwrap();
+        let prompts = client.list_prompts().await.unwrap();
+        assert_eq!(prompts.len(), 3);
+        assert_eq!(prompts[0].name, "prompt1");
+        assert_eq!(prompts[2].name, "prompt3");
+    }
+
+    #[tokio::test]
+    async fn test_get_prompt() {
+        use wiremock::matchers::{body_partial_json, header, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "initialize" }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0", "id": "test-id",
+                        "result": {
+                            "protocolVersion": PROTOCOL_VERSION,
+                            "capabilities": { "prompts": {} },
+                            "serverInfo": { "name": "test", "version": "1.0.0" }
+                        }
+                    }))
+                    .insert_header("Mcp-Session-Id", "test-session"),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "notifications/initialized" }),
+            ))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(body_partial_json(serde_json::json!({ "method": "prompts/get" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": "test-id",
+                "result": {
+                    "description": "A test prompt",
+                    "messages": [
+                        { "role": "user", "content": { "type": "text", "text": "Review this code" } }
+                    ]
+                }
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let mut client = HttpClient::new(mock_server.uri(), None, Duration::from_secs(30)).unwrap();
+        let result = client
+            .get_prompt(
+                "code_review",
+                Some(serde_json::json!({"code": "fn main() {}"})),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.messages.len(), 1);
+        assert_eq!(result.messages[0].role, "user");
     }
 }

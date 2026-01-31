@@ -13,6 +13,7 @@ pub use stdio::run;
 
 use crate::config::Config;
 use crate::mcp::client::{McpClient, create_client};
+use crate::mcp::protocol::{Prompt, Resource};
 use anyhow::Result;
 use lru::LruCache;
 use search::{IndexedSearch, ToolSearch};
@@ -126,6 +127,14 @@ pub struct GatewayServer {
     pub(crate) cache: ToolCache,
     /// Active connections to upstream servers
     clients: HashMap<String, Box<dyn McpClient>>,
+    /// Cached resources from upstream servers
+    cached_resources: Vec<Resource>,
+    /// URI -> server name routing table for resources
+    resource_index: HashMap<String, String>,
+    /// Cached prompts from upstream servers
+    cached_prompts: Vec<Prompt>,
+    /// Prompt name -> server name routing table for prompts
+    prompt_index: HashMap<String, String>,
 }
 
 impl GatewayServer {
@@ -135,6 +144,10 @@ impl GatewayServer {
             config,
             cache: ToolCache::new(),
             clients: HashMap::new(),
+            cached_resources: Vec::new(),
+            resource_index: HashMap::new(),
+            cached_prompts: Vec::new(),
+            prompt_index: HashMap::new(),
         }
     }
 
@@ -170,6 +183,51 @@ impl GatewayServer {
                         server_name: server_name.clone(),
                         tool,
                     });
+                }
+            }
+
+            // Cache resources from servers that support them
+            for (server_name, _server_config) in self.config.servers() {
+                let client = match self.clients.get_mut(server_name) {
+                    Some(c) => c,
+                    None => continue,
+                };
+
+                // Get cached init result to check capabilities
+                let init_result = client.initialize().await?;
+
+                if init_result.capabilities.resources.is_some() {
+                    let resources = client.list_resources().await?;
+                    for resource in resources {
+                        if self.resource_index.contains_key(&resource.uri) {
+                            warn!(
+                                uri = %resource.uri,
+                                server = %server_name,
+                                "Resource URI collision — overwriting previous entry"
+                            );
+                            self.cached_resources.retain(|r| r.uri != resource.uri);
+                        }
+                        self.resource_index
+                            .insert(resource.uri.clone(), server_name.clone());
+                        self.cached_resources.push(resource);
+                    }
+                }
+
+                if init_result.capabilities.prompts.is_some() {
+                    let prompts = client.list_prompts().await?;
+                    for prompt in prompts {
+                        if self.prompt_index.contains_key(&prompt.name) {
+                            warn!(
+                                name = %prompt.name,
+                                server = %server_name,
+                                "Prompt name collision — overwriting previous entry"
+                            );
+                            self.cached_prompts.retain(|p| p.name != prompt.name);
+                        }
+                        self.prompt_index
+                            .insert(prompt.name.clone(), server_name.clone());
+                        self.cached_prompts.push(prompt);
+                    }
                 }
             }
 
@@ -213,6 +271,26 @@ impl GatewayServer {
     /// Get the configuration
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// Get all cached resources
+    pub fn cached_resources(&self) -> &[Resource] {
+        &self.cached_resources
+    }
+
+    /// Look up which server owns a resource URI
+    pub fn resource_server(&self, uri: &str) -> Option<&str> {
+        self.resource_index.get(uri).map(|s| s.as_str())
+    }
+
+    /// Get all cached prompts
+    pub fn cached_prompts(&self) -> &[Prompt] {
+        &self.cached_prompts
+    }
+
+    /// Look up which server owns a prompt name
+    pub fn prompt_server(&self, name: &str) -> Option<&str> {
+        self.prompt_index.get(name).map(|s| s.as_str())
     }
 
     /// Shutdown all upstream client connections
