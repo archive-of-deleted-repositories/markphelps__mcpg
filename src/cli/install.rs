@@ -1,4 +1,4 @@
-use super::InitArgs;
+use super::InstallArgs;
 use super::style;
 use crate::agents::{self, Agent, ServerWithSource};
 use crate::config::{Config, PROJECT_CONFIG_FILE, ServerConfig, TransportConfig};
@@ -11,16 +11,16 @@ use std::path::PathBuf;
 use tracing::debug;
 use tracing_subscriber::EnvFilter;
 
-/// Result of the init command planning phase
-pub struct InitPlan {
+/// Result of the install command planning phase
+pub struct InstallPlan {
     pub project_path: PathBuf,
     pub servers: HashMap<String, ServerWithSource>,
     pub selected_servers: Vec<String>,
     pub agent: Box<dyn Agent>,
 }
 
-/// Run the init command
-pub fn run(args: InitArgs, verbose: bool) -> Result<()> {
+/// Run the install command
+pub fn run(args: InstallArgs, verbose: bool) -> Result<()> {
     // Initialize tracing when verbose mode is enabled
     if verbose {
         tracing_subscriber::fmt()
@@ -42,7 +42,7 @@ pub fn run(args: InitArgs, verbose: bool) -> Result<()> {
     if agents.is_empty() {
         bail!(
             "No supported AI agent configuration found.\n\
-             Make sure Claude Code is installed and has been used in this project."
+             Make sure a supported AI agent is installed and has been used in this project."
         );
     }
 
@@ -116,7 +116,7 @@ pub fn run(args: InitArgs, verbose: bool) -> Result<()> {
             .collect()
     };
 
-    let plan = InitPlan {
+    let plan = InstallPlan {
         project_path: project_path.clone(),
         servers: servers.clone(),
         selected_servers: selected_servers.clone(),
@@ -167,7 +167,7 @@ fn select_servers(server_names: &[String]) -> Result<Vec<usize>> {
         .context("Failed to get server selection")
 }
 
-fn show_plan(plan: &InitPlan) -> Result<()> {
+fn show_plan(plan: &InstallPlan) -> Result<()> {
     let term = Term::stderr();
     let width = term.size().1 as usize;
 
@@ -304,7 +304,7 @@ fn describe_server(server: &ServerConfig) -> String {
     }
 }
 
-fn execute_plan(plan: &InitPlan) -> Result<()> {
+fn execute_plan(plan: &InstallPlan) -> Result<()> {
     let mcpg_config_path = plan.project_path.join(PROJECT_CONFIG_FILE);
     if mcpg_config_path.exists() {
         println!(

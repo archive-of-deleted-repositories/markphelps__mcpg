@@ -14,7 +14,8 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Init(args)) => cli::init::run(args, cli.verbose),
+        Some(Commands::Install(args)) => cli::install::run(args, cli.verbose),
+        Some(Commands::Uninstall(args)) => cli::uninstall::run(args, cli.verbose),
         Some(Commands::Serve) | None => {
             // Initialize tracing/telemetry
             telemetry::init();

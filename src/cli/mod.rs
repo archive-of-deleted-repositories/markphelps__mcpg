@@ -15,11 +15,12 @@ pub struct Cli {
 pub enum Commands {
     /// Run the MCP Gateway server (default)
     Serve,
-    Init(InitArgs),
+    Install(InstallArgs),
+    Uninstall(UninstallArgs),
 }
 
 #[derive(clap::Args, Debug)]
-pub struct InitArgs {
+pub struct InstallArgs {
     /// Show what would change without writing
     #[arg(long)]
     pub dry_run: bool,
@@ -28,8 +29,19 @@ pub struct InitArgs {
     pub yes: bool,
 }
 
-pub mod init;
+#[derive(clap::Args, Debug)]
+pub struct UninstallArgs {
+    /// Show what would change without writing
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Skip confirmation prompts
+    #[arg(short, long)]
+    pub yes: bool,
+}
+
+pub mod install;
 pub mod style;
+pub mod uninstall;
 
 #[cfg(test)]
 mod tests {
@@ -49,53 +61,95 @@ mod tests {
     }
 
     #[test]
-    fn test_init_command() {
-        let cli = Cli::parse_from(["mcpg", "init"]);
+    fn test_install_command() {
+        let cli = Cli::parse_from(["mcpg", "install"]);
         match cli.command {
-            Some(Commands::Init(args)) => {
+            Some(Commands::Install(args)) => {
                 assert!(!args.dry_run);
                 assert!(!args.yes);
             }
-            _ => panic!("Expected Init command"),
+            _ => panic!("Expected Install command"),
         }
     }
 
     #[test]
-    fn test_init_with_dry_run() {
-        let cli = Cli::parse_from(["mcpg", "init", "--dry-run"]);
+    fn test_install_with_dry_run() {
+        let cli = Cli::parse_from(["mcpg", "install", "--dry-run"]);
         match cli.command {
-            Some(Commands::Init(args)) => assert!(args.dry_run),
-            _ => panic!("Expected Init command"),
+            Some(Commands::Install(args)) => assert!(args.dry_run),
+            _ => panic!("Expected Install command"),
         }
     }
 
     #[test]
-    fn test_init_with_yes_short() {
-        let cli = Cli::parse_from(["mcpg", "init", "-y"]);
+    fn test_install_with_yes_short() {
+        let cli = Cli::parse_from(["mcpg", "install", "-y"]);
         match cli.command {
-            Some(Commands::Init(args)) => assert!(args.yes),
-            _ => panic!("Expected Init command"),
+            Some(Commands::Install(args)) => assert!(args.yes),
+            _ => panic!("Expected Install command"),
         }
     }
 
     #[test]
-    fn test_init_with_yes_long() {
-        let cli = Cli::parse_from(["mcpg", "init", "--yes"]);
+    fn test_install_with_yes_long() {
+        let cli = Cli::parse_from(["mcpg", "install", "--yes"]);
         match cli.command {
-            Some(Commands::Init(args)) => assert!(args.yes),
-            _ => panic!("Expected Init command"),
+            Some(Commands::Install(args)) => assert!(args.yes),
+            _ => panic!("Expected Install command"),
         }
     }
 
     #[test]
     fn test_verbose_global_flag() {
-        let cli = Cli::parse_from(["mcpg", "--verbose", "init"]);
+        let cli = Cli::parse_from(["mcpg", "--verbose", "install"]);
         assert!(cli.verbose);
     }
 
     #[test]
     fn test_verbose_short_flag() {
-        let cli = Cli::parse_from(["mcpg", "-v", "init"]);
+        let cli = Cli::parse_from(["mcpg", "-v", "install"]);
         assert!(cli.verbose);
+    }
+
+    #[test]
+    fn test_uninstall_command() {
+        let cli = Cli::parse_from(["mcpg", "uninstall"]);
+        match cli.command {
+            Some(Commands::Uninstall(args)) => {
+                assert!(!args.dry_run);
+                assert!(!args.yes);
+            }
+            _ => panic!("Expected Uninstall command"),
+        }
+    }
+
+    #[test]
+    fn test_uninstall_with_dry_run() {
+        let cli = Cli::parse_from(["mcpg", "uninstall", "--dry-run"]);
+        match cli.command {
+            Some(Commands::Uninstall(args)) => assert!(args.dry_run),
+            _ => panic!("Expected Uninstall command"),
+        }
+    }
+
+    #[test]
+    fn test_uninstall_with_yes() {
+        let cli = Cli::parse_from(["mcpg", "uninstall", "-y"]);
+        match cli.command {
+            Some(Commands::Uninstall(args)) => assert!(args.yes),
+            _ => panic!("Expected Uninstall command"),
+        }
+    }
+
+    #[test]
+    fn test_uninstall_all_flags() {
+        let cli = Cli::parse_from(["mcpg", "uninstall", "-y", "--dry-run"]);
+        match cli.command {
+            Some(Commands::Uninstall(args)) => {
+                assert!(args.dry_run);
+                assert!(args.yes);
+            }
+            _ => panic!("Expected Uninstall command"),
+        }
     }
 }

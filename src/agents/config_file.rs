@@ -51,27 +51,35 @@ where
             .with_context(|| format!("Failed to write config: {}", self.path().display()))
     }
 
-    /// Create a timestamped backup of the config file
+    /// Create a backup of the config file.
     ///
-    /// Returns the path to the backup file.
-    /// If .json.backup already exists, adds a timestamp.
+    /// The backup is always written to `.json.backup`. If a previous backup
+    /// already exists at that path, it is moved to a timestamped path first
+    /// (e.g. `.json.backup.1234567890`) so that `.json.backup` always
+    /// represents the most recent backup.
     pub fn create_backup(&self) -> Result<PathBuf> {
         if !self.path().exists() {
             anyhow::bail!("Cannot backup non-existent file: {}", self.path().display());
         }
 
         let backup_path = self.path().with_extension("json.backup");
-        // If backup exists, add timestamp
-        let backup_path = if backup_path.exists() {
+
+        // If a previous backup exists, move it to a timestamped path
+        if backup_path.exists() {
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            self.path()
-                .with_extension(format!("json.backup.{}", timestamp))
-        } else {
-            backup_path
-        };
+            let timestamped_path = self
+                .path()
+                .with_extension(format!("json.backup.{}", timestamp));
+            fs::rename(&backup_path, &timestamped_path).with_context(|| {
+                format!(
+                    "Failed to move existing backup to {}",
+                    timestamped_path.display()
+                )
+            })?;
+        }
 
         fs::copy(self.path(), &backup_path)
             .with_context(|| format!("Failed to create backup at {}", backup_path.display()))?;
@@ -152,11 +160,11 @@ mod tests {
     }
 
     #[test]
-    fn test_backup_adds_timestamp_when_backup_exists() {
+    fn test_backup_moves_existing_to_timestamped() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("test.json");
 
-        fs::write(&config_path, "{}").unwrap();
+        fs::write(&config_path, r#"{"version": 1}"#).unwrap();
 
         let config_file = ConfigFile::<TestConfig>::new(config_path.clone());
 
@@ -164,10 +172,20 @@ mod tests {
         let backup1 = config_file.create_backup().unwrap();
         assert_eq!(backup1, config_path.with_extension("json.backup"));
 
-        // Create second backup - should have timestamp
+        // Update the config file
+        fs::write(&config_path, r#"{"version": 2}"#).unwrap();
+
+        // Create second backup - should still be .json.backup
         let backup2 = config_file.create_backup().unwrap();
-        assert_ne!(backup1, backup2);
-        assert!(backup2.to_string_lossy().contains(".json.backup."));
+        assert_eq!(backup2, config_path.with_extension("json.backup"));
+
+        // The old backup should have been moved to a timestamped path
+        let entries: Vec<_> = fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".json.backup."))
+            .collect();
+        assert_eq!(entries.len(), 1, "Expected one timestamped backup");
     }
 
     #[test]

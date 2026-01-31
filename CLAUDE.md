@@ -17,25 +17,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 mcpg
 mcpg serve
 
-# Initialize mcpg for current project (interactive)
-mcpg init
+# Install mcpg for current project (interactive)
+mcpg install
 
-# Initialize with options
-mcpg init --dry-run    # Show what would change without writing
-mcpg init --yes        # Skip confirmation prompts
-mcpg init -y           # Short form of --yes
-mcpg init --verbose    # Show debug output
-mcpg -v init           # Verbose flag is global
+# Install with options
+mcpg install --dry-run    # Show what would change without writing
+mcpg install --yes        # Skip confirmation prompts
+mcpg install -y           # Short form of --yes
+mcpg install --verbose    # Show debug output
+mcpg -v install           # Verbose flag is global
+
+# Uninstall mcpg from current project
+mcpg uninstall
+
+# Uninstall with options
+mcpg uninstall --dry-run    # Show what would change without writing
+mcpg uninstall --yes        # Skip confirmation prompts
+mcpg uninstall -y           # Short form of --yes
+mcpg uninstall --verbose    # Show debug output
+mcpg -v uninstall           # Verbose flag is global
 ```
 
-### Init Command
+### Install Command
 
-The `init` command bootstraps mcpg for a project by:
+The `install` command bootstraps mcpg for a project by:
 1. Detecting AI agent configurations (currently Claude Code)
 2. Reading MCP servers from all config sources
 3. Creating `.mcpg.json` with upstream server configs
 4. Adding mcpg to the agent's config (in the same file where servers are defined)
 5. Disabling migrated servers in their source configs (via `disabledMcpServers`)
+6. Creating backup files before modifying any configs
+
+### Uninstall Command
+
+The `uninstall` command removes mcpg from a project by:
+1. Removing `.mcpg.json`
+2. Restoring backup files (original configs from before install)
 
 ## Build & Test Commands
 
@@ -107,7 +124,8 @@ src/
 ├── lib.rs            # Library exports
 ├── cli/              # CLI commands
 │   ├── mod.rs        # Clap CLI definitions
-│   ├── init.rs       # Init command implementation
+│   ├── install.rs    # Install command implementation
+│   ├── uninstall.rs  # Uninstall command implementation
 │   └── style.rs      # Terminal styling utilities
 ├── agents/           # AI agent configuration management
 │   ├── mod.rs        # Agent trait, discovery
@@ -141,7 +159,7 @@ src/
 - **StdioClient**: Spawns subprocess, JSON-RPC over stdin/stdout
 - **TransportConfig**: `Stdio { command, args, env }` or `Http { url, headers }`
 
-**Agent System (for init command)**:
+**Agent System (for install/uninstall commands)**:
 - **Agent trait**: Interface for AI agent config management
 - **ClaudeCodeAgent**: Reads/writes Claude Code MCP configs
 - **ConfigLevel**: Project vs User scoped configs

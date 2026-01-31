@@ -772,7 +772,7 @@ mod tests {
 
         // Create a user-level config with nested projects structure
         // Simulates ~/.claude.json format
-        let user_config_path = temp_dir.path().join(".mcp.json");
+        let user_config_path = temp_dir.path().join(".claude.json");
         let project_key = project_path.to_string_lossy().to_string();
 
         let user_config = UserLevelConfig {
@@ -805,19 +805,20 @@ mod tests {
         )
         .unwrap();
 
+        // Test load_servers_from_source directly with ConfigLevel::User
+        // to avoid depending on dirs::home_dir()
         let agent = ClaudeCodeAgent::new();
-        let servers = agent.get_servers(project_path).unwrap();
+        let source = ConfigSource {
+            path: user_config_path,
+            level: ConfigLevel::User,
+        };
+        let (servers, _disabled) = agent.load_servers_from_source(&source, project_path).unwrap();
 
         // Should find the server from nested format
         assert_eq!(servers.len(), 1);
         assert!(servers.contains_key("nested-server"));
 
-        let server = servers.get("nested-server").unwrap();
-        match &server.config.transport {
-            TransportConfig::Stdio { command, .. } => {
-                assert_eq!(command, "nested-command");
-            }
-            _ => panic!("Expected stdio transport"),
-        }
+        let server = &servers["nested-server"];
+        assert_eq!(server.command.as_deref(), Some("nested-command"));
     }
 }

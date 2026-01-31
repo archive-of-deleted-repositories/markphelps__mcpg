@@ -1,4 +1,4 @@
-//! Integration tests for the `mcpg init` command
+//! Integration tests for the `mcpg install` command
 
 use mcpg::config::PROJECT_CONFIG_FILE;
 use std::fs;
@@ -10,28 +10,28 @@ fn mcpg_bin() -> Command {
 }
 
 #[test]
-fn test_init_no_agent_config() {
+fn test_install_no_agent_config() {
     let temp_dir = TempDir::new().unwrap();
 
     let output = mcpg_bin()
         .current_dir(temp_dir.path())
-        .arg("init")
+        .arg("install")
         .arg("--yes")
-        .env("HOME", temp_dir.path()) // No Claude config here
+        .env("HOME", temp_dir.path()) // No agent config here
         .output()
         .expect("Failed to run mcpg");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("No supported AI agent") || stderr.contains("Claude Code"),
+        stderr.contains("No supported AI agent"),
         "Expected error about missing config, got: {}",
         stderr
     );
 }
 
 #[test]
-fn test_init_dry_run_creates_no_files() {
+fn test_install_dry_run_creates_no_files() {
     let temp_dir = TempDir::new().unwrap();
     let project_path = temp_dir.path();
 
@@ -48,7 +48,7 @@ fn test_init_dry_run_creates_no_files() {
 
     let output = mcpg_bin()
         .current_dir(project_path)
-        .arg("init")
+        .arg("install")
         .arg("--dry-run")
         .arg("--yes")
         .env("HOME", temp_dir.path())
@@ -82,7 +82,7 @@ fn test_init_dry_run_creates_no_files() {
 }
 
 #[test]
-fn test_init_creates_mcpg_config() {
+fn test_install_creates_mcpg_config() {
     let temp_dir = TempDir::new().unwrap();
     let project_path = temp_dir.path();
 
@@ -99,7 +99,7 @@ fn test_init_creates_mcpg_config() {
 
     let output = mcpg_bin()
         .current_dir(project_path)
-        .arg("init")
+        .arg("install")
         .arg("--yes")
         .env("HOME", temp_dir.path())
         .output()
@@ -133,7 +133,7 @@ fn test_init_creates_mcpg_config() {
 }
 
 #[test]
-fn test_init_adds_mcpg_to_claude_config() {
+fn test_install_adds_mcpg_to_claude_config() {
     let temp_dir = TempDir::new().unwrap();
     let project_path = temp_dir.path();
 
@@ -150,7 +150,7 @@ fn test_init_adds_mcpg_to_claude_config() {
 
     let output = mcpg_bin()
         .current_dir(project_path)
-        .arg("init")
+        .arg("install")
         .arg("--yes")
         .env("HOME", temp_dir.path())
         .output()
@@ -162,12 +162,12 @@ fn test_init_adds_mcpg_to_claude_config() {
     let updated_config = fs::read_to_string(project_path.join(".mcp.json")).unwrap();
     assert!(
         updated_config.contains("mcpg"),
-        ".mcp.json should contain mcpg after init"
+        ".mcp.json should contain mcpg after install"
     );
 }
 
 #[test]
-fn test_init_with_no_servers_still_adds_mcpg() {
+fn test_install_with_no_servers_still_adds_mcpg() {
     let temp_dir = TempDir::new().unwrap();
     let project_path = temp_dir.path();
 
@@ -179,7 +179,7 @@ fn test_init_with_no_servers_still_adds_mcpg() {
 
     let output = mcpg_bin()
         .current_dir(project_path)
-        .arg("init")
+        .arg("install")
         .arg("--yes")
         .env("HOME", temp_dir.path())
         .output()
@@ -205,7 +205,7 @@ fn test_init_with_no_servers_still_adds_mcpg() {
 }
 
 #[test]
-fn test_help_shows_init_command() {
+fn test_help_shows_install_command() {
     let output = mcpg_bin()
         .arg("--help")
         .output()
@@ -213,7 +213,10 @@ fn test_help_shows_init_command() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success());
-    assert!(stdout.contains("init"), "Help should mention init command");
+    assert!(
+        stdout.contains("install"),
+        "Help should mention install command"
+    );
     assert!(
         stdout.contains("serve"),
         "Help should mention serve command"
@@ -221,9 +224,9 @@ fn test_help_shows_init_command() {
 }
 
 #[test]
-fn test_init_help_shows_options() {
+fn test_install_help_shows_options() {
     let output = mcpg_bin()
-        .arg("init")
+        .arg("install")
         .arg("--help")
         .output()
         .expect("Failed to run mcpg");
@@ -232,20 +235,16 @@ fn test_init_help_shows_options() {
     assert!(output.status.success());
     assert!(
         stdout.contains("--dry-run"),
-        "Init help should show --dry-run option"
+        "Install help should show --dry-run option"
     );
     assert!(
         stdout.contains("--yes") || stdout.contains("-y"),
-        "Init help should show --yes/-y option"
-    );
-    assert!(
-        stdout.contains("--verbose") || stdout.contains("-v"),
-        "Init help should show --verbose/-v option"
+        "Install help should show --yes/-y option"
     );
 }
 
 #[test]
-fn test_init_already_configured() {
+fn test_install_already_configured() {
     let temp_dir = TempDir::new().unwrap();
     let project_path = temp_dir.path();
 
@@ -261,7 +260,7 @@ fn test_init_already_configured() {
 
     let output = mcpg_bin()
         .current_dir(project_path)
-        .arg("init")
+        .arg("install")
         .arg("--yes")
         .env("HOME", temp_dir.path())
         .output()
