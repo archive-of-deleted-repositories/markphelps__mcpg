@@ -3,6 +3,10 @@ use serde_json::Value;
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
+/// Maximum number of pagination pages to fetch before aborting.
+/// Prevents infinite loops from buggy upstream servers.
+pub const MAX_PAGINATION_PAGES: usize = 100;
+
 /// MCP request methods
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpMethod {
@@ -202,6 +206,9 @@ pub struct ToolsCapability {
 pub struct ListToolsResult {
     /// Available tools
     pub tools: Vec<Tool>,
+    /// Opaque cursor for pagination; if present, more results are available
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 /// A tool definition
@@ -469,5 +476,41 @@ mod tests {
             String::from(McpNotification::Initialized),
             "notifications/initialized"
         );
+    }
+
+    #[test]
+    fn test_list_tools_result_without_next_cursor() {
+        let json = r#"{"tools": []}"#;
+        let result: ListToolsResult = serde_json::from_str(json).unwrap();
+        assert!(result.tools.is_empty());
+        assert!(result.next_cursor.is_none());
+    }
+
+    #[test]
+    fn test_list_tools_result_with_next_cursor() {
+        let json = r#"{"tools": [], "nextCursor": "abc123"}"#;
+        let result: ListToolsResult = serde_json::from_str(json).unwrap();
+        assert!(result.tools.is_empty());
+        assert_eq!(result.next_cursor, Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn test_list_tools_result_serialization_omits_null_cursor() {
+        let result = ListToolsResult {
+            tools: vec![],
+            next_cursor: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("nextCursor"));
+    }
+
+    #[test]
+    fn test_list_tools_result_serialization_includes_cursor() {
+        let result = ListToolsResult {
+            tools: vec![],
+            next_cursor: Some("cursor123".to_string()),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains(r#""nextCursor":"cursor123""#));
     }
 }

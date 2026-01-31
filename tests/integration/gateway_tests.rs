@@ -172,6 +172,10 @@ fn test_gateway_list_tools() {
     let result = client.list_tools();
 
     assert_eq!(result.tools.len(), 4, "Should have exactly 4 gateway tools");
+    assert!(
+        result.next_cursor.is_none(),
+        "Gateway should not paginate its own tools"
+    );
     let tool_names: Vec<&str> = result.tools.iter().map(|t| t.name.as_str()).collect();
     assert!(tool_names.contains(&"search"));
     assert!(tool_names.contains(&"inspect"));

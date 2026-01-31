@@ -40,7 +40,7 @@ impl GatewayServer {
 
         let response = match request.method.as_str() {
             "initialize" => self.handle_initialize(id, request.params).await?,
-            "tools/list" => self.handle_tools_list(id).await?,
+            "tools/list" => self.handle_tools_list(id, request.params).await?,
             "tools/call" => self.handle_tools_call(id, request.params).await?,
             method => JsonRpcResponse {
                 jsonrpc: "2.0".to_string(),
@@ -90,9 +90,32 @@ impl GatewayServer {
         })
     }
 
-    async fn handle_tools_list(&mut self, id: RequestId) -> Result<JsonRpcResponse> {
+    async fn handle_tools_list(
+        &mut self,
+        id: RequestId,
+        params: Option<serde_json::Value>,
+    ) -> Result<JsonRpcResponse> {
+        // MCP pagination: since mcpg never emits cursors for tools/list,
+        // any non-null cursor is invalid (error -32602 per spec)
+        if let Some(ref p) = params
+            && let Some(cursor) = p.get("cursor")
+            && !cursor.is_null()
+        {
+            return Ok(JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id,
+                result: None,
+                error: Some(JsonRpcError {
+                    code: -32602,
+                    message: "Invalid params: unknown cursor".to_string(),
+                    data: None,
+                }),
+            });
+        }
+
         let result = ListToolsResult {
             tools: gateway_tools(),
+            next_cursor: None,
         };
 
         Ok(JsonRpcResponse {
@@ -284,6 +307,51 @@ mod tests {
         let response = server.handle_request(request).await.unwrap().unwrap();
         assert!(response.error.is_none());
         assert!(response.result.is_some());
+
+        let result: ListToolsResult = serde_json::from_value(response.result.unwrap()).unwrap();
+        assert_eq!(result.tools.len(), 4);
+        assert!(result.next_cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_handle_tools_list_empty_params() {
+        let mut server = create_test_server();
+        let request = JsonRpcRequest::new(2, "tools/list", Some(serde_json::json!({})));
+
+        let response = server.handle_request(request).await.unwrap().unwrap();
+        assert!(response.error.is_none());
+
+        let result: ListToolsResult = serde_json::from_value(response.result.unwrap()).unwrap();
+        assert_eq!(result.tools.len(), 4);
+        assert!(result.next_cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_handle_tools_list_with_cursor_returns_error() {
+        let mut server = create_test_server();
+        let request = JsonRpcRequest::new(
+            2,
+            "tools/list",
+            Some(serde_json::json!({"cursor": "some-cursor"})),
+        );
+
+        let response = server.handle_request(request).await.unwrap().unwrap();
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -32602);
+        assert!(error.message.contains("cursor"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_tools_list_with_null_cursor_succeeds() {
+        let mut server = create_test_server();
+        let request =
+            JsonRpcRequest::new(2, "tools/list", Some(serde_json::json!({"cursor": null})));
+
+        let response = server.handle_request(request).await.unwrap().unwrap();
+        assert!(response.error.is_none());
 
         let result: ListToolsResult = serde_json::from_value(response.result.unwrap()).unwrap();
         assert_eq!(result.tools.len(), 4);

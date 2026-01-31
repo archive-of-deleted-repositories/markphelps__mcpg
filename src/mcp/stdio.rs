@@ -10,8 +10,8 @@ use uuid::Uuid;
 use super::client::McpClient;
 use super::protocol::{
     CallToolParams, CallToolResult, ClientCapabilities, ClientInfo, InitializeParams,
-    InitializeResult, JsonRpcRequest, JsonRpcResponse, ListToolsResult, McpMethod, McpNotification,
-    PROTOCOL_VERSION, Tool,
+    InitializeResult, JsonRpcRequest, JsonRpcResponse, ListToolsResult, MAX_PAGINATION_PAGES,
+    McpMethod, McpNotification, PROTOCOL_VERSION, Tool,
 };
 
 /// MCP client that communicates via stdio (stdin/stdout)
@@ -206,20 +206,49 @@ impl McpClient for StdioClient {
                 self.initialize().await?;
             }
 
-            self.send_request(McpMethod::ToolsList.as_str(), None)
-                .await?;
-            let response = self.read_response().await?;
-            let list_tools_result: ListToolsResult = serde_json::from_value(
-                response
-                    .result
-                    .ok_or_else(|| anyhow::anyhow!("No result in tools/list response"))?,
-            )?;
+            let mut all_tools = Vec::new();
+            let mut cursor: Option<String> = None;
 
-            // TODO: support pagination
+            for page in 0..MAX_PAGINATION_PAGES {
+                let params = cursor.as_ref().map(|c| serde_json::json!({ "cursor": c }));
 
-            let tools = list_tools_result.tools;
-            debug!(count = tools.len(), "Listed tools from upstream");
-            Ok(tools)
+                self.send_request(McpMethod::ToolsList.as_str(), params)
+                    .await?;
+                let response = self.read_response().await?;
+                let result: ListToolsResult = serde_json::from_value(
+                    response
+                        .result
+                        .ok_or_else(|| anyhow::anyhow!("No result in tools/list response"))?,
+                )?;
+
+                debug!(
+                    page = page,
+                    count = result.tools.len(),
+                    has_next = result.next_cursor.is_some(),
+                    "Received tools page from upstream"
+                );
+
+                if result.tools.is_empty() && result.next_cursor.is_some() {
+                    anyhow::bail!(
+                        "Upstream server returned empty page with cursor — possible infinite pagination loop"
+                    );
+                }
+
+                all_tools.extend(result.tools);
+
+                match result.next_cursor {
+                    Some(next) => cursor = Some(next),
+                    None => {
+                        debug!(count = all_tools.len(), "Listed tools from upstream");
+                        return Ok(all_tools);
+                    }
+                }
+            }
+
+            anyhow::bail!(
+                "Exceeded maximum pagination limit of {} pages while listing tools",
+                MAX_PAGINATION_PAGES
+            )
         }
         .instrument(debug_span!("upstream_list_tools"))
         .await

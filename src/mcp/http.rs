@@ -10,8 +10,8 @@ use super::client::McpClient;
 use super::error::McpError;
 use super::protocol::{
     CallToolParams, CallToolResult, ClientCapabilities, ClientInfo, InitializeParams,
-    InitializeResult, JsonRpcRequest, JsonRpcResponse, ListToolsResult, McpMethod, McpNotification,
-    PROTOCOL_VERSION, Tool,
+    InitializeResult, JsonRpcRequest, JsonRpcResponse, ListToolsResult, MAX_PAGINATION_PAGES,
+    McpMethod, McpNotification, PROTOCOL_VERSION, Tool,
 };
 
 /// MCP client that communicates via HTTP (Streamable HTTP transport)
@@ -226,16 +226,48 @@ impl McpClient for HttpClient {
             self.initialize().await?;
         }
 
-        let response = self
-            .send_request(McpMethod::ToolsList.as_str(), None)
-            .await?;
-        let list_result: ListToolsResult =
-            serde_json::from_value(response.result.ok_or_else(|| {
-                McpError::Other(anyhow::anyhow!("No result in tools/list response"))
-            })?)
-            .map_err(McpError::Serialization)?;
+        let mut all_tools = Vec::new();
+        let mut cursor: Option<String> = None;
 
-        Ok(list_result.tools)
+        for page in 0..MAX_PAGINATION_PAGES {
+            let params = cursor.as_ref().map(|c| serde_json::json!({ "cursor": c }));
+
+            let response = self
+                .send_request(McpMethod::ToolsList.as_str(), params)
+                .await?;
+            let result: ListToolsResult =
+                serde_json::from_value(response.result.ok_or_else(|| {
+                    McpError::Other(anyhow::anyhow!("No result in tools/list response"))
+                })?)
+                .map_err(McpError::Serialization)?;
+
+            debug!(
+                page = page,
+                count = result.tools.len(),
+                has_next = result.next_cursor.is_some(),
+                "Received tools page from upstream"
+            );
+
+            if result.tools.is_empty() && result.next_cursor.is_some() {
+                return Err(McpError::Other(anyhow::anyhow!(
+                    "Upstream server returned empty page with cursor — possible infinite pagination loop"
+                ))
+                .into());
+            }
+
+            all_tools.extend(result.tools);
+
+            match result.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => return Ok(all_tools),
+            }
+        }
+
+        Err(McpError::Other(anyhow::anyhow!(
+            "Exceeded maximum pagination limit of {} pages while listing tools",
+            MAX_PAGINATION_PAGES
+        ))
+        .into())
     }
 
     async fn call_tool(&mut self, name: &str, args: serde_json::Value) -> Result<CallToolResult> {
@@ -1049,5 +1081,319 @@ mod tests {
             err_str.contains("Unauthorized"),
             "Error message should include reason"
         );
+    }
+
+    #[tokio::test]
+    async fn test_list_tools_pagination_multiple_pages() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wiremock::matchers::{body_partial_json, header, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // Mock initialize
+        let init_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "test-id",
+            "result": {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "serverInfo": { "name": "test", "version": "1.0.0" }
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "initialize" }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(&init_response)
+                    .insert_header("Mcp-Session-Id", "test-session"),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "notifications/initialized" }),
+            ))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Mock tools/list with 2 pages
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count_clone = call_count.clone();
+
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(serde_json::json!({ "method": "tools/list" })))
+            .respond_with(move |_req: &wiremock::Request| {
+                let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
+                if count == 0 {
+                    // Page 1: 2 tools + cursor
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": "test-id",
+                        "result": {
+                            "tools": [
+                                { "name": "tool1", "description": "First", "inputSchema": {"type": "object"} },
+                                { "name": "tool2", "description": "Second", "inputSchema": {"type": "object"} }
+                            ],
+                            "nextCursor": "page2"
+                        }
+                    }))
+                } else {
+                    // Page 2: 1 tool, no cursor
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": "test-id",
+                        "result": {
+                            "tools": [
+                                { "name": "tool3", "description": "Third", "inputSchema": {"type": "object"} }
+                            ]
+                        }
+                    }))
+                }
+            })
+            .expect(2)
+            .mount(&mock_server)
+            .await;
+
+        let mut client = HttpClient::new(mock_server.uri(), None, Duration::from_secs(30)).unwrap();
+
+        let tools = client.list_tools().await.unwrap();
+        assert_eq!(tools.len(), 3);
+        assert_eq!(tools[0].name, "tool1");
+        assert_eq!(tools[1].name, "tool2");
+        assert_eq!(tools[2].name, "tool3");
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_list_tools_no_pagination() {
+        use wiremock::matchers::{body_partial_json, header, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // Mock initialize
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "initialize" }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": "test-id",
+                        "result": {
+                            "protocolVersion": PROTOCOL_VERSION,
+                            "capabilities": {},
+                            "serverInfo": { "name": "test", "version": "1.0.0" }
+                        }
+                    }))
+                    .insert_header("Mcp-Session-Id", "test-session"),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "notifications/initialized" }),
+            ))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Mock tools/list with single page, no cursor
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "tools/list" }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "test-id",
+                "result": {
+                    "tools": [
+                        { "name": "tool1", "inputSchema": {"type": "object"} }
+                    ]
+                }
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let mut client = HttpClient::new(mock_server.uri(), None, Duration::from_secs(30)).unwrap();
+
+        let tools = client.list_tools().await.unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "tool1");
+    }
+
+    #[tokio::test]
+    async fn test_list_tools_empty_page_with_cursor_fails() {
+        use wiremock::matchers::{body_partial_json, header, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // Mock initialize
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "initialize" }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": "test-id",
+                        "result": {
+                            "protocolVersion": PROTOCOL_VERSION,
+                            "capabilities": {},
+                            "serverInfo": { "name": "test", "version": "1.0.0" }
+                        }
+                    }))
+                    .insert_header("Mcp-Session-Id", "test-session"),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "notifications/initialized" }),
+            ))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Mock tools/list returning empty tools with a cursor (buggy server)
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "tools/list" }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "test-id",
+                "result": {
+                    "tools": [],
+                    "nextCursor": "bogus-cursor"
+                }
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let mut client = HttpClient::new(mock_server.uri(), None, Duration::from_secs(30)).unwrap();
+
+        let result = client.list_tools().await;
+        assert!(result.is_err(), "Expected error for empty page with cursor");
+        let err_str = result.unwrap_err().to_string();
+        assert!(
+            err_str.contains("empty page with cursor"),
+            "Error should mention empty page: {}",
+            err_str
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_tools_pagination_limit_exceeded() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wiremock::matchers::{body_partial_json, header, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // Mock initialize
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "initialize" }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": "test-id",
+                        "result": {
+                            "protocolVersion": PROTOCOL_VERSION,
+                            "capabilities": {},
+                            "serverInfo": { "name": "test", "version": "1.0.0" }
+                        }
+                    }))
+                    .insert_header("Mcp-Session-Id", "test-session"),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "notifications/initialized" }),
+            ))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Mock tools/list that always returns a tool AND a nextCursor (never terminates)
+        let page_count = Arc::new(AtomicUsize::new(0));
+        let page_count_clone = page_count.clone();
+
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/json"))
+            .and(body_partial_json(
+                serde_json::json!({ "method": "tools/list" }),
+            ))
+            .respond_with(move |_req: &wiremock::Request| {
+                let page = page_count_clone.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "test-id",
+                    "result": {
+                        "tools": [
+                            { "name": format!("tool-page-{}", page), "inputSchema": {"type": "object"} }
+                        ],
+                        "nextCursor": format!("cursor-{}", page + 1)
+                    }
+                }))
+            })
+            .mount(&mock_server)
+            .await;
+
+        let mut client = HttpClient::new(mock_server.uri(), None, Duration::from_secs(30)).unwrap();
+
+        let result = client.list_tools().await;
+        assert!(
+            result.is_err(),
+            "Expected error when exceeding pagination limit"
+        );
+        let err_str = result.unwrap_err().to_string();
+        assert!(
+            err_str.contains("Exceeded maximum pagination limit"),
+            "Error should mention pagination limit: {}",
+            err_str
+        );
+
+        // Verify we actually hit the limit
+        assert_eq!(page_count.load(Ordering::SeqCst), MAX_PAGINATION_PAGES);
     }
 }
