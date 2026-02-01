@@ -2,6 +2,7 @@ use once_cell::sync::Lazy;
 use tracing::{debug, trace};
 
 use super::config_file::ConfigFile;
+use super::shared::{self, LoadedSource};
 use super::{registry, Agent, ServerWithSource};
 use crate::config::{ServerConfig, TransportConfig};
 use anyhow::{bail, Context, Result};
@@ -130,6 +131,50 @@ impl OpenCodeAgent {
         Ok(config.mcp)
     }
 
+    /// Load a config source and return a normalized LoadedSource
+    fn load_source(&self, source_path: &Path) -> Result<LoadedSource> {
+        let raw_servers = self.load_servers_from_source(source_path)?;
+
+        let has_mcpg = raw_servers.contains_key("mcpg");
+        let mcpg_disabled = raw_servers
+            .get("mcpg")
+            .map(|s| s.enabled == Some(false))
+            .unwrap_or(false);
+
+        let mut servers = HashMap::new();
+        let mut disabled_names = Vec::new();
+
+        for (name, oc_server) in raw_servers {
+            if name == "mcpg" {
+                trace!(server = %name, "Skipping mcpg server");
+                continue;
+            }
+
+            if oc_server.enabled == Some(false) {
+                debug!(server = %name, "Skipping disabled server");
+                disabled_names.push(name);
+                continue;
+            }
+
+            match self.convert_to_server_config(&name, &oc_server) {
+                Ok(server_config) => {
+                    trace!(server = %name, "Converted server config");
+                    servers.insert(name, server_config);
+                }
+                Err(e) => {
+                    debug!(server = %name, error = %e, "Failed to convert server config");
+                }
+            }
+        }
+
+        Ok(LoadedSource {
+            servers,
+            disabled_names,
+            has_mcpg,
+            mcpg_disabled,
+        })
+    }
+
     /// Create the mcpg server configuration for OpenCode
     fn mcpg_server_config() -> OpenCodeMcpServer {
         OpenCodeMcpServer {
@@ -196,81 +241,7 @@ impl Agent for OpenCodeAgent {
 
     fn get_servers(&self, project_path: &Path) -> Result<HashMap<String, ServerWithSource>> {
         let sources = self.config_sources(project_path);
-        let mut servers: HashMap<String, ServerWithSource> = HashMap::new();
-
-        debug!("Checking {} OpenCode config sources", sources.len());
-
-        // Process sources in reverse order (lowest priority first)
-        // so higher priority sources can override
-        for source_path in sources.iter().rev() {
-            let exists = source_path.exists();
-            debug!(
-                source = %source_path.display(),
-                exists = exists,
-                "Checking OpenCode config source"
-            );
-
-            if !exists {
-                continue;
-            }
-
-            match self.load_servers_from_source(source_path) {
-                Ok(source_servers) => {
-                    debug!(
-                        source = %source_path.display(),
-                        server_count = source_servers.len(),
-                        servers = ?source_servers.keys().collect::<Vec<_>>(),
-                        "Loaded OpenCode config from source"
-                    );
-
-                    for (name, oc_server) in source_servers {
-                        // Skip mcpg itself
-                        if name == "mcpg" {
-                            trace!(server = %name, "Skipping mcpg server");
-                            continue;
-                        }
-
-                        // Skip disabled servers
-                        if oc_server.enabled == Some(false) {
-                            debug!(server = %name, "Skipping disabled server");
-                            continue;
-                        }
-
-                        match self.convert_to_server_config(&name, &oc_server) {
-                            Ok(server_config) => {
-                                trace!(server = %name, "Converted OpenCode server config");
-                                servers.insert(
-                                    name,
-                                    ServerWithSource {
-                                        config: server_config,
-                                        source: source_path.clone(),
-                                    },
-                                );
-                            }
-                            Err(e) => {
-                                debug!(server = %name, error = %e, "Failed to convert OpenCode server config");
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    debug!(
-                        source = %source_path.display(),
-                        error = %e,
-                        "Failed to load OpenCode config from source"
-                    );
-                    continue;
-                }
-            }
-        }
-
-        debug!(
-            total_servers = servers.len(),
-            server_names = ?servers.keys().collect::<Vec<_>>(),
-            "Final OpenCode server list"
-        );
-
-        Ok(servers)
+        shared::collect_servers(&sources, |source_path| self.load_source(source_path))
     }
 
     fn apply_changes(
@@ -278,72 +249,22 @@ impl Agent for OpenCodeAgent {
         project_path: &Path,
         servers_to_disable: &[String],
     ) -> Result<()> {
-        // Group servers by their source file
         let servers = self.get_servers(project_path)?;
-        let mut sources_to_update: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        let sources = self.config_sources(project_path);
 
-        for server_name in servers_to_disable {
-            if let Some(server_with_source) = servers.get(server_name) {
-                sources_to_update
-                    .entry(server_with_source.source.clone())
-                    .or_default()
-                    .push(server_name.clone());
-            }
-        }
-
-        let all_sources = self.config_sources(project_path);
-
-        // Determine the highest priority source to add mcpg to
-        let mcpg_target_source = if !sources_to_update.is_empty() {
-            all_sources
-                .iter()
-                .find(|s| sources_to_update.contains_key(*s))
-                .cloned()
-        } else {
-            // No servers to disable - find the first existing config file
-            all_sources.iter().find(|s| s.exists()).cloned()
-        };
-
-        // Update each source file
-        for (source_path, servers_in_source) in &sources_to_update {
-            let should_add_mcpg = mcpg_target_source
-                .as_ref()
-                .map(|s| s == source_path)
-                .unwrap_or(false);
-
-            self.update_config_file(source_path, servers_in_source, should_add_mcpg)?;
-        }
-
-        // If no servers were disabled but we have a target for mcpg, add it there
-        if sources_to_update.is_empty()
-            && let Some(target) = mcpg_target_source
-        {
-            self.update_config_file(&target, &[], true)?;
-        }
-
-        Ok(())
+        shared::apply_changes_to_sources(
+            &sources,
+            &servers,
+            servers_to_disable,
+            |source_path, to_disable, add_mcpg| {
+                self.update_config_file(source_path, to_disable, add_mcpg)
+            },
+        )
     }
 
     fn mcpg_configured_at(&self, project_path: &Path) -> Option<PathBuf> {
         let sources = self.config_sources(project_path);
-
-        for source_path in &sources {
-            if !source_path.exists() {
-                continue;
-            }
-
-            if let Ok(source_servers) = self.load_servers_from_source(source_path)
-                && let Some(mcpg_server) = source_servers.get("mcpg")
-            {
-                // Return None if mcpg is explicitly disabled
-                if mcpg_server.enabled == Some(false) {
-                    return None;
-                }
-                return Some(source_path.clone());
-            }
-        }
-
-        None
+        shared::find_mcpg_source(&sources, |source_path| self.load_source(source_path))
     }
 }
 

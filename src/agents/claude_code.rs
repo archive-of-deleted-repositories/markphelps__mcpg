@@ -2,6 +2,7 @@ use once_cell::sync::Lazy;
 use tracing::{debug, trace};
 
 use super::config_file::ConfigFile;
+use super::shared::{self, LoadedSource};
 use super::{registry, Agent, ServerWithSource};
 use crate::config::{ServerConfig, TransportConfig};
 use anyhow::{bail, Context, Result};
@@ -304,6 +305,48 @@ impl ClaudeCodeAgent {
         }
     }
 
+    /// Load a config source and return a normalized LoadedSource
+    fn load_source(&self, source_path: &Path, project_path: &Path) -> Result<LoadedSource> {
+        let source = self
+            .config_sources_with_level(project_path)
+            .into_iter()
+            .find(|s| s.path == source_path)
+            .unwrap_or(ConfigSource {
+                path: source_path.to_path_buf(),
+                level: ConfigLevel::Project,
+            });
+
+        let (raw_servers, disabled) = self.load_servers_from_source(&source, project_path)?;
+
+        let has_mcpg = raw_servers.contains_key("mcpg");
+        let mcpg_disabled = disabled.contains(&"mcpg".to_string());
+
+        let mut servers = HashMap::new();
+        for (name, claude_server) in raw_servers {
+            if name == "mcpg" {
+                trace!(server = %name, "Skipping mcpg server");
+                continue;
+            }
+
+            match self.convert_to_server_config(&name, &claude_server) {
+                Ok(server_config) => {
+                    trace!(server = %name, "Converted server config");
+                    servers.insert(name, server_config);
+                }
+                Err(e) => {
+                    debug!(server = %name, error = %e, "Failed to convert server config");
+                }
+            }
+        }
+
+        Ok(LoadedSource {
+            servers,
+            disabled_names: disabled,
+            has_mcpg,
+            mcpg_disabled,
+        })
+    }
+
     /// Create the mcpg server configuration
     fn mcpg_server_config() -> ClaudeMcpServer {
         ClaudeMcpServer {
@@ -332,91 +375,10 @@ impl Agent for ClaudeCodeAgent {
     // Use default detect() implementation which checks if any config source exists
 
     fn get_servers(&self, project_path: &Path) -> Result<HashMap<String, ServerWithSource>> {
-        let sources = self.config_sources_with_level(project_path);
-        let mut servers: HashMap<String, ServerWithSource> = HashMap::new();
-        let mut all_disabled: Vec<String> = Vec::new();
-
-        debug!("Checking {} config sources for MCP servers", sources.len());
-
-        // Process sources in reverse order (lowest priority first)
-        // so higher priority sources can override
-        for source in sources.iter().rev() {
-            let exists = source.path.exists();
-            debug!(
-                source = %source.path.display(),
-                level = ?source.level,
-                exists = exists,
-                "Checking config source"
-            );
-
-            if !exists {
-                continue;
-            }
-
-            match self.load_servers_from_source(source, project_path) {
-                Ok((source_servers, disabled)) => {
-                    debug!(
-                        source = %source.path.display(),
-                        server_count = source_servers.len(),
-                        disabled_count = disabled.len(),
-                        servers = ?source_servers.keys().collect::<Vec<_>>(),
-                        disabled_servers = ?disabled,
-                        "Loaded config from source"
-                    );
-
-                    // Track all disabled servers
-                    all_disabled.extend(disabled);
-
-                    // Add servers from this source (will be overwritten by higher priority)
-                    for (name, claude_server) in source_servers {
-                        // Skip mcpg itself
-                        if name == "mcpg" {
-                            trace!(server = %name, "Skipping mcpg server");
-                            continue;
-                        }
-
-                        match self.convert_to_server_config(&name, &claude_server) {
-                            Ok(server_config) => {
-                                trace!(server = %name, "Converted server config");
-                                servers.insert(
-                                    name,
-                                    ServerWithSource {
-                                        config: server_config,
-                                        source: source.path.clone(),
-                                    },
-                                );
-                            }
-                            Err(e) => {
-                                debug!(server = %name, error = %e, "Failed to convert server config");
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    debug!(
-                        source = %source.path.display(),
-                        error = %e,
-                        "Failed to load config from source"
-                    );
-                    continue;
-                }
-            }
-        }
-
-        // Remove disabled servers
-        for disabled in &all_disabled {
-            if servers.remove(disabled).is_some() {
-                debug!(server = %disabled, "Removed disabled server");
-            }
-        }
-
-        debug!(
-            total_servers = servers.len(),
-            server_names = ?servers.keys().collect::<Vec<_>>(),
-            "Final server list"
-        );
-
-        Ok(servers)
+        let sources = self.config_sources(project_path);
+        shared::collect_servers(&sources, |source_path| {
+            self.load_source(source_path, project_path)
+        })
     }
 
     fn apply_changes(
@@ -424,91 +386,31 @@ impl Agent for ClaudeCodeAgent {
         project_path: &Path,
         servers_to_disable: &[String],
     ) -> Result<()> {
-        // Group servers by their source file
         let servers = self.get_servers(project_path)?;
-        let mut sources_to_update: HashMap<PathBuf, Vec<String>> = HashMap::new();
-
-        for server_name in servers_to_disable {
-            if let Some(server_with_source) = servers.get(server_name) {
-                sources_to_update
-                    .entry(server_with_source.source.clone())
-                    .or_default()
-                    .push(server_name.clone());
-            }
-        }
-
         let sources_with_level = self.config_sources_with_level(project_path);
+        let source_paths: Vec<PathBuf> =
+            sources_with_level.iter().map(|s| s.path.clone()).collect();
 
-        // Determine the highest priority source to add mcpg to:
-        // - If there are servers to disable, use the highest priority source with servers
-        // - Otherwise, use the highest priority existing config file
-        let mcpg_target_source = if !sources_to_update.is_empty() {
-            sources_with_level
-                .iter()
-                .find(|s| sources_to_update.contains_key(&s.path))
-                .cloned()
-        } else {
-            // No servers to disable - find the first existing config file
-            sources_with_level.iter().find(|s| s.path.exists()).cloned()
-        };
-
-        // Update each source file - disable servers and add mcpg to highest priority source
-        for (source_path, servers_to_disable_in_source) in &sources_to_update {
-            // Determine the config level for this source
-            let source_level = sources_with_level
-                .iter()
-                .find(|s| s.path == *source_path)
-                .map(|s| s.level)
-                .unwrap_or(ConfigLevel::Project);
-
-            let should_add_mcpg = mcpg_target_source
-                .as_ref()
-                .map(|s| s.path == *source_path)
-                .unwrap_or(false);
-
-            self.update_config_file(
-                source_path,
-                &source_level,
-                project_path,
-                servers_to_disable_in_source,
-                should_add_mcpg,
-            )?;
-        }
-
-        // If no servers were disabled but we have a target for mcpg, add it there
-        if sources_to_update.is_empty()
-            && let Some(target) = mcpg_target_source
-        {
-            self.update_config_file(&target.path, &target.level, project_path, &[], true)?;
-        }
-
-        Ok(())
+        shared::apply_changes_to_sources(
+            &source_paths,
+            &servers,
+            servers_to_disable,
+            |source_path, to_disable, add_mcpg| {
+                let level = sources_with_level
+                    .iter()
+                    .find(|s| s.path == *source_path)
+                    .map(|s| s.level)
+                    .unwrap_or(ConfigLevel::Project);
+                self.update_config_file(source_path, &level, project_path, to_disable, add_mcpg)
+            },
+        )
     }
 
     fn mcpg_configured_at(&self, project_path: &Path) -> Option<PathBuf> {
-        let sources = self.config_sources_with_level(project_path);
-        let mut all_disabled: Vec<String> = Vec::new();
-        let mut mcpg_source: Option<PathBuf> = None;
-
-        for source in &sources {
-            if !source.path.exists() {
-                continue;
-            }
-
-            if let Ok((servers, disabled)) = self.load_servers_from_source(source, project_path) {
-                all_disabled.extend(disabled);
-                if servers.contains_key("mcpg") {
-                    mcpg_source = Some(source.path.clone());
-                }
-            }
-        }
-
-        // Return None if mcpg is disabled
-        if all_disabled.contains(&"mcpg".to_string()) {
-            return None;
-        }
-
-        mcpg_source
+        let sources = self.config_sources(project_path);
+        shared::find_mcpg_source(&sources, |source_path| {
+            self.load_source(source_path, project_path)
+        })
     }
 }
 
@@ -556,7 +458,8 @@ mod tests {
 
     #[test]
     fn test_detect_returns_false_for_nonexistent_path() {
-        let agent = ClaudeCodeAgent::new();
+        let temp_dir = TempDir::new().unwrap();
+        let agent = ClaudeCodeAgent::with_home_dir(temp_dir.path().join("fake_home"));
         assert!(!agent.detect(&PathBuf::from("/nonexistent/path")));
     }
 
