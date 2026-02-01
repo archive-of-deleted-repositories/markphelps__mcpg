@@ -39,23 +39,6 @@ pub struct ServerWithSource {
     pub source: PathBuf,
 }
 
-/// Whether a config file is project-scoped or user-scoped
-/// This affects how the config is parsed (flat vs nested structure)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigLevel {
-    /// Project-scoped config - servers typically at top level
-    Project,
-    /// User-scoped config - servers may be nested under project paths
-    User,
-}
-
-/// A config source with its level
-#[derive(Debug, Clone)]
-pub struct ConfigSource {
-    pub path: PathBuf,
-    pub level: ConfigLevel,
-}
-
 mod config_file;
 mod registry;
 
@@ -76,7 +59,7 @@ macro_rules! register_agents {
 }
 
 // Register agent modules here
-register_agents!(claude_code);
+register_agents!(claude_code, opencode);
 
 static INIT: Once = Once::new();
 
@@ -162,5 +145,35 @@ mod tests {
 
         assert_eq!(agents1.len(), agents2.len());
         assert_eq!(agents1[0].name(), agents2[0].name());
+    }
+
+    fn setup_opencode_project() -> TempDir {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("opencode.json"), "{}").unwrap();
+        temp_dir
+    }
+
+    #[test]
+    #[serial]
+    fn test_discover_agents_finds_opencode() {
+        let temp_dir = setup_opencode_project();
+
+        let agents = discover_agents(temp_dir.path());
+        let names: Vec<&str> = agents.iter().map(|a| a.name()).collect();
+        assert!(names.contains(&"OpenCode"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_discover_agents_finds_both() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join(".mcp.json"), "{}").unwrap();
+        fs::write(temp_dir.path().join("opencode.json"), "{}").unwrap();
+
+        let agents = discover_agents(temp_dir.path());
+        assert!(agents.len() >= 2);
+        let names: Vec<&str> = agents.iter().map(|a| a.name()).collect();
+        assert!(names.contains(&"Claude Code"));
+        assert!(names.contains(&"OpenCode"));
     }
 }

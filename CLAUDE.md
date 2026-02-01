@@ -49,11 +49,11 @@ mcpg -v status             # Verbose flag is global
 ### Install Command
 
 The `install` command bootstraps mcpg for a project by:
-1. Detecting AI agent configurations (currently Claude Code)
+1. Detecting AI agent configurations (Claude Code and OpenCode)
 2. Reading MCP servers from all config sources
 3. Creating `.mcpg.json` with upstream server configs
 4. Adding mcpg to the agent's config (in the same file where servers are defined)
-5. Disabling migrated servers in their source configs (via `disabledMcpServers`)
+5. Disabling migrated servers in their source configs
 6. Creating backup files before modifying any configs
 
 ### Status Command
@@ -149,6 +149,7 @@ src/
 ├── agents/           # AI agent configuration management
 │   ├── mod.rs        # Agent trait, discovery
 │   ├── claude_code.rs # Claude Code agent implementation
+│   ├── opencode.rs    # OpenCode agent implementation
 │   ├── config_file.rs # Generic JSON config file helper
 │   └── registry.rs   # Agent registration system
 ├── server/           # MCP server implementation
@@ -188,15 +189,22 @@ src/
 **Agent System (for install/uninstall commands)**:
 - **Agent trait**: Interface for AI agent config management
 - **ClaudeCodeAgent**: Reads/writes Claude Code MCP configs
-- **ConfigLevel**: Project vs User scoped configs
+- **OpenCodeAgent**: Reads/writes OpenCode MCP configs
 - **ServerWithSource**: Tracks which config file each server came from
 
-### Claude Code Config Sources (priority order, highest first)
+### Agent Config Sources (priority order, highest first)
+
+**Claude Code:**
 
 1. `.mcp.json` (project directory)
 2. `.claude/settings.local.json` (project directory)
 3. `~/.claude.json` (user home)
 4. `~/.claude/mcp_servers.json` (user home)
+
+**OpenCode:**
+
+1. `opencode.json` (project directory)
+2. `~/.config/opencode/opencode.json` (global)
 
 ### Config Discovery Order
 

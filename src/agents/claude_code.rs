@@ -2,12 +2,29 @@ use once_cell::sync::Lazy;
 use tracing::{debug, trace};
 
 use super::config_file::ConfigFile;
-use super::{registry, Agent, ConfigLevel, ConfigSource, ServerWithSource};
+use super::{registry, Agent, ServerWithSource};
 use crate::config::{ServerConfig, TransportConfig};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+/// Whether a config file is project-scoped or user-scoped
+/// This affects how the config is parsed (flat vs nested structure)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigLevel {
+    /// Project-scoped config - servers at top level
+    Project,
+    /// User-scoped config - servers nested under project paths
+    User,
+}
+
+/// A config source with its level
+#[derive(Debug, Clone)]
+struct ConfigSource {
+    path: PathBuf,
+    level: ConfigLevel,
+}
 
 static REGISTER: Lazy<()> = Lazy::new(|| {
     registry::register_agent(|| Box::new(ClaudeCodeAgent::new()));

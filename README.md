@@ -55,7 +55,7 @@ mcpg install --yes
 
 This will:
 
-1. Detect your AI agent configuration (currently supports Claude Code)
+1. Detect your AI agent configuration (supports Claude Code and OpenCode)
 2. Show you all configured MCP servers across your config files
 3. Let you select which servers to route through mcpg
 4. Create `.mcpg.json` with your upstream server configs
@@ -201,11 +201,11 @@ mcpg -v uninstall         # Verbose debug output
 
 The `install` command bootstraps mcpg for a project by:
 
-1. **Detecting your AI agent** - Finds supported agent configurations in the current project (currently Claude Code)
+1. **Detecting your AI agent** - Finds supported agent configurations in the current project
 2. **Discovering MCP servers** - Reads servers from all agent config sources, tracking which file each came from
 3. **Server selection** - Interactive multi-select to choose which servers to route through mcpg (or `--yes` to select all)
 4. **Creating `.mcpg.json`** - Writes the gateway config with your selected upstream servers
-5. **Updating agent config** - Adds mcpg to your agent's MCP config and disables the migrated servers via `disabledMcpServers`
+5. **Updating agent config** - Adds mcpg to your agent's MCP config and disables the migrated servers
 6. **Creating backups** - Backs up any modified config files (`.backup` extension)
 
 After running `install`, restart your AI agent for changes to take effect.
@@ -313,6 +313,20 @@ Connects to remote MCP servers over HTTP using the Streamable HTTP protocol (MCP
 4. `~/.claude/mcp_servers.json`
 
 When migrating, mcpg adds itself to the highest-priority config source that contains servers, and disables the migrated servers via `disabledMcpServers` in each source file.
+
+</details>
+
+<details>
+<summary>OpenCode</summary>
+
+`mcpg install` detects and migrates servers from [OpenCode](https://github.com/sst/opencode)'s config files, checked in priority order:
+
+1. `opencode.json` (project directory)
+2. `~/.config/opencode/opencode.json` (global)
+
+Both config files use the same flat structure with MCP servers under the `mcp` key. OpenCode supports `"local"` (stdio) and `"remote"` (HTTP) server types.
+
+When migrating, mcpg adds itself to the highest-priority config source that contains servers, and disables the migrated servers by setting `enabled: false` on each server entry.
 
 </details>
 
