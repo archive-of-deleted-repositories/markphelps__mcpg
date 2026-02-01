@@ -28,26 +28,27 @@ Traditional MCP integration loads all tool schemas at startup:
 ## Features
 
 - ✅ MCP server implementation (stdio transport)
-- ✅ Progressive tool discovery via search/inspect/call
+- ✅ Progressive tool discovery via search/inspect/call/list
 - ✅ Upstream MCP client for stdio and HTTP servers
+- ✅ Resources and prompts passthrough
+- ✅ Cursor-based pagination for list operations
 - ✅ Universal configuration layer
 - ✅ Automatic process lifecycle management
-- ✅ HTTP transport for upstream servers
+- ✅ Install/uninstall commands for easy setup
 - 🚧 BM25 search ranking (planned)
-- 🚧 Resources and prompts (planned)
 
 ## Quick Start
 
-The fastest way to get started is with `mcpg init`, which automatically detects your AI agent's MCP servers and configures mcpg as a gateway.
+The fastest way to get started is with `mcpg install`, which automatically detects your AI agent's MCP servers and configures mcpg as a gateway.
 
-### 1. Run `mcpg init`
+### 1. Run `mcpg install`
 
 ```bash
 # Interactive setup - detects your agent and migrates servers
-mcpg init
+mcpg install
 
 # Or skip prompts and select all servers
-mcpg init --yes
+mcpg install --yes
 ```
 
 This will:
@@ -59,7 +60,7 @@ This will:
 
 ### 2. Restart your AI agent
 
-After init completes, restart your AI agent (e.g., restart Claude Code). The agent will now connect to mcpg and see 4 gateway tools instead of all upstream tools.
+After install completes, restart your AI agent (e.g., restart Claude Code). The agent will now connect to mcpg and see 4 gateway tools instead of all upstream tools.
 
 ### Manual Setup
 
@@ -104,6 +105,14 @@ mcpg exposes 4 gateway tools for progressive discovery:
 | `inspect` | Get detailed schema for a specific tool |
 | `call` | Execute a tool on an upstream server |
 | `list` | List configured servers or tools on a server |
+
+### Resources and Prompts
+
+mcpg passes through resources and prompts from upstream servers:
+
+- **resources/list** and **resources/read** are forwarded to the appropriate upstream server
+- **prompts/list** and **prompts/get** are forwarded to the appropriate upstream server
+- Collision detection warns when multiple servers expose the same resource URI or prompt name
 
 ### Example Workflow
 
@@ -166,19 +175,28 @@ See `docs/examples/gateway-demo.sh` for a complete working demo.
 mcpg
 mcpg serve
 
-# Initialize mcpg for a project
-mcpg init
+# Install mcpg for a project
+mcpg install
 
-# Init options
-mcpg init --dry-run    # Preview changes without writing files
-mcpg init --yes        # Skip prompts, select all servers
-mcpg init -y           # Short form of --yes
-mcpg -v init           # Verbose debug output
+# Install options
+mcpg install --dry-run    # Preview changes without writing files
+mcpg install --yes        # Skip prompts, select all servers
+mcpg install -y           # Short form of --yes
+mcpg -v install           # Verbose debug output
+
+# Uninstall mcpg from a project
+mcpg uninstall
+
+# Uninstall options
+mcpg uninstall --dry-run  # Preview changes without writing files
+mcpg uninstall --yes      # Skip confirmation prompts
+mcpg uninstall -y         # Short form of --yes
+mcpg -v uninstall         # Verbose debug output
 ```
 
-### `mcpg init`
+### `mcpg install`
 
-The `init` command bootstraps mcpg for a project by:
+The `install` command bootstraps mcpg for a project by:
 
 1. **Detecting your AI agent** - Finds supported agent configurations in the current project (currently Claude Code)
 2. **Discovering MCP servers** - Reads servers from all agent config sources, tracking which file each came from
@@ -187,7 +205,14 @@ The `init` command bootstraps mcpg for a project by:
 5. **Updating agent config** - Adds mcpg to your agent's MCP config and disables the migrated servers via `disabledMcpServers`
 6. **Creating backups** - Backs up any modified config files (`.backup` extension)
 
-After running `init`, restart your AI agent for changes to take effect.
+After running `install`, restart your AI agent for changes to take effect.
+
+### `mcpg uninstall`
+
+The `uninstall` command reverses the install process:
+
+1. **Removing `.mcpg.json`** - Deletes the gateway configuration
+2. **Restoring backups** - Restores agent config files from `.backup` files created during install
 
 ## Configuration
 
@@ -269,7 +294,7 @@ Connects to remote MCP servers over HTTP using the Streamable HTTP protocol (MCP
 
 ### Claude Code
 
-`mcpg init` detects and migrates servers from Claude Code's config files, checked in priority order:
+`mcpg install` detects and migrates servers from Claude Code's config files, checked in priority order:
 
 **Project-scoped:**
 1. `.mcp.json`

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Key Architecture**: mcpg is itself an MCP server (not a CLI tool) that AI agents connect to. It then forwards tool calls to configured upstream MCP servers on-demand.
 
-**Current Status**: MCP Gateway Server fully implemented with search/inspect/call/list tools. Includes reverse-index search, LRU caching, and comprehensive test coverage.
+**Current Status**: MCP Gateway Server fully implemented with search/inspect/call/list tools, resources and prompts passthrough, cursor-based pagination, and comprehensive test coverage.
 
 ## CLI Commands
 
@@ -103,6 +103,7 @@ Setup: `npm install` (installs husky)
 ┌─────────────────────────────────────────────────────┐
 │              mcpg (MCP Server)                      │
 │  Tools: search, inspect, call, list                 │
+│  + resources/prompts passthrough                    │
 │  - Progressive tool discovery                       │
 │  - Forwards calls to upstream servers               │
 └────────────────────┬────────────────────────────────┘
@@ -122,6 +123,7 @@ Setup: `npm install` (installs husky)
 src/
 ├── main.rs           # Entry point, CLI dispatch
 ├── lib.rs            # Library exports
+├── telemetry.rs      # OpenTelemetry setup
 ├── cli/              # CLI commands
 │   ├── mod.rs        # Clap CLI definitions
 │   ├── install.rs    # Install command implementation
@@ -134,17 +136,20 @@ src/
 │   └── registry.rs   # Agent registration system
 ├── server/           # MCP server implementation
 │   ├── mod.rs        # GatewayServer, ToolCache
-│   ├── handler.rs    # Request handlers (search/inspect/call/list)
-│   ├── stdio.rs      # Stdio transport and JSON-RPC routing
+│   ├── handler.rs    # Tool call handlers (search/inspect/call/list)
+│   ├── stdio.rs      # Stdio transport, JSON-RPC routing, MCP request handlers
 │   ├── search.rs     # Reverse index search implementation
 │   └── tools.rs      # Gateway tool schema definitions
 ├── config/           # Configuration management
 │   ├── types.rs      # Config, ServerConfig, TransportConfig
 │   └── loader.rs     # Config discovery and validation
 └── mcp/              # MCP client for upstream servers
-    ├── protocol.rs   # JSON-RPC 2.0 types, MCP protocol types
-    ├── client.rs     # McpClient trait (async interface)
-    └── stdio.rs      # StdioClient implementation
+    ├── mod.rs         # Module exports
+    ├── protocol.rs    # JSON-RPC 2.0 types, MCP protocol types
+    ├── client.rs      # McpClient trait, create_client() factory
+    ├── stdio.rs       # StdioClient implementation
+    ├── http.rs        # HttpClient implementation (Streamable HTTP)
+    └── error.rs       # MCP error types
 ```
 
 ### Key Types
@@ -153,11 +158,15 @@ src/
 - **GatewayServer**: Main server state, manages upstream connections
 - **ToolCache**: Reverse-index search with LRU caching
 - **Tools**: `search`, `inspect`, `call`, `list`
+- **Resources passthrough**: `resources/list`, `resources/read` forwarded to upstream
+- **Prompts passthrough**: `prompts/list`, `prompts/get` forwarded to upstream
 
 **Client Side (mcpg connecting to upstream)**:
-- **McpClient trait**: `initialize()`, `list_tools()`, `call_tool()`, `shutdown()`
+- **McpClient trait**: `initialize()`, `list_tools()`, `call_tool()`, `list_resources()`, `read_resource()`, `list_prompts()`, `get_prompt()`, `shutdown()`
 - **StdioClient**: Spawns subprocess, JSON-RPC over stdin/stdout
+- **HttpClient**: MCP Streamable HTTP client with session management
 - **TransportConfig**: `Stdio { command, args, env }` or `Http { url, headers }`
+- **create_client()**: Factory function that creates the right client from ServerConfig
 
 **Agent System (for install/uninstall commands)**:
 - **Agent trait**: Interface for AI agent config management
@@ -191,9 +200,11 @@ If tests hang, kill orphaned servers: `pkill -f "server-everything"`
 - **Async runtime**: Tokio with multi-threaded runtime
 - **Protocol version**: "2025-06-18"
 - **Message format**: Newline-delimited JSON-RPC over stdio
-- **Error handling**: anyhow with context chaining
-- **Request IDs**: Atomic i64 counter, sequential
+- **Error handling**: anyhow with context chaining, thiserror for MCP errors
+- **Request IDs**: UUID v4 for HTTP clients, sequential i64 for stdio
 - **Search**: Reverse index with prefix matching, O(k) lookups
+- **Pagination**: Cursor-based pagination with safety limits (max 100 pages) for tools, resources, and prompts
+- **Resources/Prompts**: Passthrough to upstream servers with collision detection
 
 ## Resources
 
