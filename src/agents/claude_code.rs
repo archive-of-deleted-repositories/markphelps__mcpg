@@ -74,16 +74,28 @@ fn default_transport_type() -> String {
     "stdio".to_string()
 }
 
-pub struct ClaudeCodeAgent;
+pub struct ClaudeCodeAgent {
+    home_dir: Option<PathBuf>,
+}
 
 impl ClaudeCodeAgent {
     pub fn new() -> Self {
-        Self
+        Self { home_dir: None }
+    }
+
+    #[cfg(test)]
+    pub fn with_home_dir(home: PathBuf) -> Self {
+        Self {
+            home_dir: Some(home),
+        }
     }
 
     /// Get config sources with their level (project vs user)
     fn config_sources_with_level(&self, project_path: &Path) -> Vec<ConfigSource> {
-        let home = dirs::home_dir().unwrap_or_default();
+        let home = self
+            .home_dir
+            .clone()
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default());
 
         vec![
             // Project-scoped (highest priority)
@@ -96,14 +108,6 @@ impl ClaudeCodeAgent {
                 level: ConfigLevel::Project,
             },
             // User-scoped
-            ConfigSource {
-                path: home.join(".claude/settings.local.json"),
-                level: ConfigLevel::User,
-            },
-            ConfigSource {
-                path: home.join(".claude/settings.json"),
-                level: ConfigLevel::User,
-            },
             ConfigSource {
                 path: home.join(".claude.json"),
                 level: ConfigLevel::User,
@@ -550,15 +554,20 @@ mod tests {
 
     #[test]
     fn test_config_sources_returns_expected_paths() {
-        let agent = ClaudeCodeAgent::new();
+        let agent = ClaudeCodeAgent::with_home_dir(PathBuf::from("/fake/home"));
         let project_path = PathBuf::from("/test/project");
         let sources = agent.config_sources(&project_path);
 
-        assert_eq!(sources.len(), 6);
+        assert_eq!(sources.len(), 4);
         assert_eq!(sources[0], PathBuf::from("/test/project/.mcp.json"));
         assert_eq!(
             sources[1],
             PathBuf::from("/test/project/.claude/settings.local.json")
+        );
+        assert_eq!(sources[2], PathBuf::from("/fake/home/.claude.json"));
+        assert_eq!(
+            sources[3],
+            PathBuf::from("/fake/home/.claude/mcp_servers.json")
         );
     }
 
@@ -820,5 +829,415 @@ mod tests {
 
         let server = &servers["nested-server"];
         assert_eq!(server.command.as_deref(), Some("nested-command"));
+    }
+
+    // ---- Test helpers for multi-source merging tests ----
+
+    fn stdio_server(command: &str) -> ClaudeMcpServer {
+        ClaudeMcpServer {
+            transport_type: "stdio".to_string(),
+            command: Some(command.to_string()),
+            args: None,
+            env: None,
+            url: None,
+            headers: None,
+        }
+    }
+
+    fn create_project_config(
+        path: &Path,
+        servers: HashMap<String, ClaudeMcpServer>,
+        disabled: Vec<String>,
+    ) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let config = ProjectLevelConfig {
+            mcp_servers: servers,
+            disabled_mcp_servers: disabled,
+            other: HashMap::new(),
+        };
+        fs::write(path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+    }
+
+    fn create_user_config(
+        path: &Path,
+        project_key: &str,
+        servers: HashMap<String, ClaudeMcpServer>,
+        disabled: Vec<String>,
+    ) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let config = UserLevelConfig {
+            projects: [(
+                project_key.to_string(),
+                ProjectSettings {
+                    mcp_servers: servers,
+                    disabled_mcp_servers: disabled,
+                    other: HashMap::new(),
+                },
+            )]
+            .into(),
+            other: HashMap::new(),
+        };
+        fs::write(path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+    }
+
+    // ---- get_servers merging tests ----
+
+    #[test]
+    fn test_merge_servers_only_project() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path().join("project");
+        let fake_home = temp_dir.path().join("home");
+        fs::create_dir_all(&project_path).unwrap();
+        fs::create_dir_all(&fake_home).unwrap();
+
+        create_project_config(
+            &project_path.join(".mcp.json"),
+            [
+                ("github".to_string(), stdio_server("github-cmd")),
+                ("slack".to_string(), stdio_server("slack-cmd")),
+            ]
+            .into(),
+            vec![],
+        );
+
+        let agent = ClaudeCodeAgent::with_home_dir(fake_home);
+        let servers = agent.get_servers(&project_path).unwrap();
+
+        assert_eq!(servers.len(), 2);
+        assert!(servers.contains_key("github"));
+        assert!(servers.contains_key("slack"));
+        assert_eq!(servers["github"].source, project_path.join(".mcp.json"));
+        assert_eq!(servers["slack"].source, project_path.join(".mcp.json"));
+    }
+
+    #[test]
+    fn test_merge_servers_only_user() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path().join("project");
+        let fake_home = temp_dir.path().join("home");
+        fs::create_dir_all(&project_path).unwrap();
+        fs::create_dir_all(&fake_home).unwrap();
+
+        let project_key = project_path.to_string_lossy().to_string();
+        let user_config_path = fake_home.join(".claude.json");
+        create_user_config(
+            &user_config_path,
+            &project_key,
+            [("github".to_string(), stdio_server("github-cmd"))].into(),
+            vec![],
+        );
+
+        let agent = ClaudeCodeAgent::with_home_dir(fake_home);
+        let servers = agent.get_servers(&project_path).unwrap();
+
+        assert_eq!(servers.len(), 1);
+        assert!(servers.contains_key("github"));
+        assert_eq!(servers["github"].source, user_config_path);
+    }
+
+    #[test]
+    fn test_merge_servers_across_project_and_user() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path().join("project");
+        let fake_home = temp_dir.path().join("home");
+        fs::create_dir_all(&project_path).unwrap();
+        fs::create_dir_all(&fake_home).unwrap();
+
+        // Project-level: github
+        create_project_config(
+            &project_path.join(".mcp.json"),
+            [("github".to_string(), stdio_server("github-cmd"))].into(),
+            vec![],
+        );
+
+        // User-level: slack
+        let project_key = project_path.to_string_lossy().to_string();
+        let user_config_path = fake_home.join(".claude.json");
+        create_user_config(
+            &user_config_path,
+            &project_key,
+            [("slack".to_string(), stdio_server("slack-cmd"))].into(),
+            vec![],
+        );
+
+        let agent = ClaudeCodeAgent::with_home_dir(fake_home);
+        let servers = agent.get_servers(&project_path).unwrap();
+
+        assert_eq!(servers.len(), 2);
+        assert!(servers.contains_key("github"));
+        assert!(servers.contains_key("slack"));
+        assert_eq!(servers["github"].source, project_path.join(".mcp.json"));
+        assert_eq!(servers["slack"].source, user_config_path);
+    }
+
+    #[test]
+    fn test_merge_project_overrides_user_collision() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path().join("project");
+        let fake_home = temp_dir.path().join("home");
+        fs::create_dir_all(&project_path).unwrap();
+        fs::create_dir_all(&fake_home).unwrap();
+
+        // Project-level: shared with project-version command
+        create_project_config(
+            &project_path.join(".mcp.json"),
+            [("shared".to_string(), stdio_server("project-version"))].into(),
+            vec![],
+        );
+
+        // User-level: shared with user-version command
+        let project_key = project_path.to_string_lossy().to_string();
+        create_user_config(
+            &fake_home.join(".claude.json"),
+            &project_key,
+            [("shared".to_string(), stdio_server("user-version"))].into(),
+            vec![],
+        );
+
+        let agent = ClaudeCodeAgent::with_home_dir(fake_home);
+        let servers = agent.get_servers(&project_path).unwrap();
+
+        assert_eq!(servers.len(), 1);
+        let shared = &servers["shared"];
+        assert_eq!(shared.source, project_path.join(".mcp.json"));
+        match &shared.config.transport {
+            TransportConfig::Stdio { command, .. } => {
+                assert_eq!(command, "project-version");
+            }
+            _ => panic!("Expected stdio transport"),
+        }
+    }
+
+    #[test]
+    fn test_merge_across_multiple_project_configs() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path().join("project");
+        let fake_home = temp_dir.path().join("home");
+        fs::create_dir_all(&project_path).unwrap();
+        fs::create_dir_all(&fake_home).unwrap();
+
+        // Higher priority: .mcp.json has github
+        create_project_config(
+            &project_path.join(".mcp.json"),
+            [("github".to_string(), stdio_server("github-cmd"))].into(),
+            vec![],
+        );
+
+        // Lower priority: .claude/settings.local.json has slack
+        create_project_config(
+            &project_path.join(".claude/settings.local.json"),
+            [("slack".to_string(), stdio_server("slack-cmd"))].into(),
+            vec![],
+        );
+
+        let agent = ClaudeCodeAgent::with_home_dir(fake_home);
+        let servers = agent.get_servers(&project_path).unwrap();
+
+        assert_eq!(servers.len(), 2);
+        assert!(servers.contains_key("github"));
+        assert!(servers.contains_key("slack"));
+        assert_eq!(servers["github"].source, project_path.join(".mcp.json"));
+        assert_eq!(
+            servers["slack"].source,
+            project_path.join(".claude/settings.local.json")
+        );
+    }
+
+    #[test]
+    fn test_merge_disabled_in_lower_priority_affects_result() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path().join("project");
+        let fake_home = temp_dir.path().join("home");
+        fs::create_dir_all(&project_path).unwrap();
+        fs::create_dir_all(&fake_home).unwrap();
+
+        // Higher priority: .mcp.json has github and slack
+        create_project_config(
+            &project_path.join(".mcp.json"),
+            [
+                ("github".to_string(), stdio_server("github-cmd")),
+                ("slack".to_string(), stdio_server("slack-cmd")),
+            ]
+            .into(),
+            vec![],
+        );
+
+        // Lower priority: .claude/settings.local.json disables github
+        create_project_config(
+            &project_path.join(".claude/settings.local.json"),
+            HashMap::new(),
+            vec!["github".to_string()],
+        );
+
+        let agent = ClaudeCodeAgent::with_home_dir(fake_home);
+        let servers = agent.get_servers(&project_path).unwrap();
+
+        assert_eq!(servers.len(), 1);
+        assert!(servers.contains_key("slack"));
+        assert!(!servers.contains_key("github"));
+    }
+
+    #[test]
+    fn test_merge_user_disabled_removes_project_server() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path().join("project");
+        let fake_home = temp_dir.path().join("home");
+        fs::create_dir_all(&project_path).unwrap();
+        fs::create_dir_all(&fake_home).unwrap();
+
+        // Project-level: github
+        create_project_config(
+            &project_path.join(".mcp.json"),
+            [("github".to_string(), stdio_server("github-cmd"))].into(),
+            vec![],
+        );
+
+        // User-level: disables github
+        let project_key = project_path.to_string_lossy().to_string();
+        create_user_config(
+            &fake_home.join(".claude.json"),
+            &project_key,
+            HashMap::new(),
+            vec!["github".to_string()],
+        );
+
+        let agent = ClaudeCodeAgent::with_home_dir(fake_home);
+        let servers = agent.get_servers(&project_path).unwrap();
+
+        assert!(servers.is_empty());
+    }
+
+    // ---- apply_changes multi-source tests ----
+
+    #[test]
+    fn test_apply_multi_source_disables_respective_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path().join("project");
+        let fake_home = temp_dir.path().join("home");
+        fs::create_dir_all(&project_path).unwrap();
+        fs::create_dir_all(&fake_home).unwrap();
+
+        // Project-level: github
+        create_project_config(
+            &project_path.join(".mcp.json"),
+            [("github".to_string(), stdio_server("github-cmd"))].into(),
+            vec![],
+        );
+
+        // User-level: slack
+        let project_key = project_path.to_string_lossy().to_string();
+        let user_config_path = fake_home.join(".claude.json");
+        create_user_config(
+            &user_config_path,
+            &project_key,
+            [("slack".to_string(), stdio_server("slack-cmd"))].into(),
+            vec![],
+        );
+
+        let agent = ClaudeCodeAgent::with_home_dir(fake_home);
+        agent
+            .apply_changes(&project_path, &["github".to_string(), "slack".to_string()])
+            .unwrap();
+
+        // Verify .mcp.json: github disabled, mcpg added (highest priority source with servers)
+        let project_config: ProjectLevelConfig =
+            serde_json::from_str(&fs::read_to_string(project_path.join(".mcp.json")).unwrap())
+                .unwrap();
+        assert!(project_config
+            .disabled_mcp_servers
+            .contains(&"github".to_string()));
+        assert!(project_config.mcp_servers.contains_key("mcpg"));
+
+        // Verify ~/.claude.json: slack disabled, mcpg NOT added (not highest priority)
+        let user_config: UserLevelConfig =
+            serde_json::from_str(&fs::read_to_string(&user_config_path).unwrap()).unwrap();
+        let project_settings = user_config.projects.get(&project_key).unwrap();
+        assert!(project_settings
+            .disabled_mcp_servers
+            .contains(&"slack".to_string()));
+        assert!(!project_settings.mcp_servers.contains_key("mcpg"));
+    }
+
+    #[test]
+    fn test_apply_user_only_adds_mcpg_to_user() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path().join("project");
+        let fake_home = temp_dir.path().join("home");
+        fs::create_dir_all(&project_path).unwrap();
+        fs::create_dir_all(&fake_home).unwrap();
+
+        // Only user-level: github
+        let project_key = project_path.to_string_lossy().to_string();
+        let user_config_path = fake_home.join(".claude.json");
+        create_user_config(
+            &user_config_path,
+            &project_key,
+            [("github".to_string(), stdio_server("github-cmd"))].into(),
+            vec![],
+        );
+
+        let agent = ClaudeCodeAgent::with_home_dir(fake_home);
+        agent
+            .apply_changes(&project_path, &["github".to_string()])
+            .unwrap();
+
+        // Verify ~/.claude.json: github disabled AND mcpg added (only source with servers)
+        let user_config: UserLevelConfig =
+            serde_json::from_str(&fs::read_to_string(&user_config_path).unwrap()).unwrap();
+        let project_settings = user_config.projects.get(&project_key).unwrap();
+        assert!(project_settings
+            .disabled_mcp_servers
+            .contains(&"github".to_string()));
+        assert!(project_settings.mcp_servers.contains_key("mcpg"));
+    }
+
+    #[test]
+    fn test_apply_collision_only_modifies_project_source() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path().join("project");
+        let fake_home = temp_dir.path().join("home");
+        fs::create_dir_all(&project_path).unwrap();
+        fs::create_dir_all(&fake_home).unwrap();
+
+        // Both have "shared" - project wins in get_servers
+        create_project_config(
+            &project_path.join(".mcp.json"),
+            [("shared".to_string(), stdio_server("project-version"))].into(),
+            vec![],
+        );
+
+        let project_key = project_path.to_string_lossy().to_string();
+        let user_config_path = fake_home.join(".claude.json");
+        create_user_config(
+            &user_config_path,
+            &project_key,
+            [("shared".to_string(), stdio_server("user-version"))].into(),
+            vec![],
+        );
+
+        let agent = ClaudeCodeAgent::with_home_dir(fake_home);
+        agent
+            .apply_changes(&project_path, &["shared".to_string()])
+            .unwrap();
+
+        // Verify .mcp.json: shared disabled, mcpg added
+        let project_config: ProjectLevelConfig =
+            serde_json::from_str(&fs::read_to_string(project_path.join(".mcp.json")).unwrap())
+                .unwrap();
+        assert!(project_config
+            .disabled_mcp_servers
+            .contains(&"shared".to_string()));
+        assert!(project_config.mcp_servers.contains_key("mcpg"));
+
+        // Verify ~/.claude.json: NOT modified (shared was attributed to project source)
+        let user_config: UserLevelConfig =
+            serde_json::from_str(&fs::read_to_string(&user_config_path).unwrap()).unwrap();
+        let project_settings = user_config.projects.get(&project_key).unwrap();
+        assert!(project_settings.disabled_mcp_servers.is_empty());
+        assert!(!project_settings.mcp_servers.contains_key("mcpg"));
     }
 }

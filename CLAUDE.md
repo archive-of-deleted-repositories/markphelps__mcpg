@@ -195,10 +195,8 @@ src/
 
 1. `.mcp.json` (project directory)
 2. `.claude/settings.local.json` (project directory)
-3. `~/.claude/settings.local.json` (user home)
-4. `~/.claude/settings.json` (user home)
-5. `~/.claude.json` (user home)
-6. `~/.claude/mcp_servers.json` (user home)
+3. `~/.claude.json` (user home)
+4. `~/.claude/mcp_servers.json` (user home)
 
 ### Config Discovery Order
 

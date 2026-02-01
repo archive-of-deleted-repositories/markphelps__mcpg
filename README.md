@@ -309,10 +309,8 @@ Connects to remote MCP servers over HTTP using the Streamable HTTP protocol (MCP
 
 **User-scoped:**
 
-3. `~/.claude/settings.local.json`
-4. `~/.claude/settings.json`
-5. `~/.claude.json`
-6. `~/.claude/mcp_servers.json`
+3. `~/.claude.json`
+4. `~/.claude/mcp_servers.json`
 
 When migrating, mcpg adds itself to the highest-priority config source that contains servers, and disables the migrated servers via `disabledMcpServers` in each source file.
 
