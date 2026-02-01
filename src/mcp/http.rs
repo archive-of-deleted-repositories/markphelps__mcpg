@@ -186,7 +186,7 @@ impl McpClient for HttpClient {
         let params = serde_json::to_value(InitializeParams {
             protocol_version: PROTOCOL_VERSION.to_string(),
             client_info: ClientInfo {
-                name: "mcpg".to_string(),
+                name: crate::config::APP_NAME.to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
             capabilities: ClientCapabilities::default(),

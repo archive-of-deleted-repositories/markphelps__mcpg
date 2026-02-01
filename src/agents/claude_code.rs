@@ -5,6 +5,7 @@ use super::config_file::ConfigFile;
 use super::shared::{self, LoadedSource};
 use super::{registry, Agent, ServerWithSource};
 use crate::config::{ServerConfig, TransportConfig};
+use crate::config::APP_NAME;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -272,8 +273,8 @@ impl ClaudeCodeAgent {
                 }
 
                 // Add mcpg if requested
-                if add_mcpg && !config.mcp_servers.contains_key("mcpg") {
-                    config.mcp_servers.insert("mcpg".to_string(), Self::mcpg_server_config());
+                if add_mcpg && !config.mcp_servers.contains_key(APP_NAME) {
+                    config.mcp_servers.insert(APP_NAME.to_string(), Self::mcpg_server_config());
                 }
 
                 config_file.save(&config)
@@ -294,10 +295,10 @@ impl ClaudeCodeAgent {
                 }
 
                 // Add mcpg if requested
-                if add_mcpg && !project_settings.mcp_servers.contains_key("mcpg") {
+                if add_mcpg && !project_settings.mcp_servers.contains_key(APP_NAME) {
                     project_settings
                         .mcp_servers
-                        .insert("mcpg".to_string(), Self::mcpg_server_config());
+                        .insert(APP_NAME.to_string(), Self::mcpg_server_config());
                 }
 
                 config_file.save(&config)
@@ -318,12 +319,12 @@ impl ClaudeCodeAgent {
 
         let (raw_servers, disabled) = self.load_servers_from_source(&source, project_path)?;
 
-        let has_mcpg = raw_servers.contains_key("mcpg");
-        let mcpg_disabled = disabled.contains(&"mcpg".to_string());
+        let has_mcpg = raw_servers.contains_key(APP_NAME);
+        let mcpg_disabled = disabled.contains(&APP_NAME.to_string());
 
         let mut servers = HashMap::new();
         for (name, claude_server) in raw_servers {
-            if name == "mcpg" {
+            if name == APP_NAME {
                 trace!(server = %name, "Skipping mcpg server");
                 continue;
             }
@@ -351,7 +352,7 @@ impl ClaudeCodeAgent {
     fn mcpg_server_config() -> ClaudeMcpServer {
         ClaudeMcpServer {
             transport_type: "stdio".to_string(),
-            command: Some("mcpg".to_string()),
+            command: Some(APP_NAME.to_string()),
             args: Some(vec![]),
             env: None,
             url: None,
@@ -542,7 +543,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
 
         assert!(updated.disabled_mcp_servers.contains(&"github".to_string()));
-        assert!(updated.mcp_servers.contains_key("mcpg"));
+        assert!(updated.mcp_servers.contains_key(APP_NAME));
     }
 
     #[test]
@@ -605,17 +606,17 @@ mod tests {
         let mut config: ProjectLevelConfig =
             serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
         config.mcp_servers.insert(
-            "mcpg".to_string(),
+            APP_NAME.to_string(),
             ClaudeMcpServer {
                 transport_type: "stdio".to_string(),
-                command: Some("mcpg".to_string()),
+                command: Some(APP_NAME.to_string()),
                 args: None,
                 env: None,
                 url: None,
                 headers: None,
             },
         );
-        config.disabled_mcp_servers.push("mcpg".to_string());
+        config.disabled_mcp_servers.push(APP_NAME.to_string());
         fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
         let agent = ClaudeCodeAgent::new();
@@ -1070,7 +1071,7 @@ mod tests {
         assert!(project_config
             .disabled_mcp_servers
             .contains(&"github".to_string()));
-        assert!(project_config.mcp_servers.contains_key("mcpg"));
+        assert!(project_config.mcp_servers.contains_key(APP_NAME));
 
         // Verify ~/.claude.json: slack disabled, mcpg NOT added (not highest priority)
         let user_config: UserLevelConfig =
@@ -1079,7 +1080,7 @@ mod tests {
         assert!(project_settings
             .disabled_mcp_servers
             .contains(&"slack".to_string()));
-        assert!(!project_settings.mcp_servers.contains_key("mcpg"));
+        assert!(!project_settings.mcp_servers.contains_key(APP_NAME));
     }
 
     #[test]
@@ -1112,7 +1113,7 @@ mod tests {
         assert!(project_settings
             .disabled_mcp_servers
             .contains(&"github".to_string()));
-        assert!(project_settings.mcp_servers.contains_key("mcpg"));
+        assert!(project_settings.mcp_servers.contains_key(APP_NAME));
     }
 
     #[test]
@@ -1151,13 +1152,13 @@ mod tests {
         assert!(project_config
             .disabled_mcp_servers
             .contains(&"shared".to_string()));
-        assert!(project_config.mcp_servers.contains_key("mcpg"));
+        assert!(project_config.mcp_servers.contains_key(APP_NAME));
 
         // Verify ~/.claude.json: NOT modified (shared was attributed to project source)
         let user_config: UserLevelConfig =
             serde_json::from_str(&fs::read_to_string(&user_config_path).unwrap()).unwrap();
         let project_settings = user_config.projects.get(&project_key).unwrap();
         assert!(project_settings.disabled_mcp_servers.is_empty());
-        assert!(!project_settings.mcp_servers.contains_key("mcpg"));
+        assert!(!project_settings.mcp_servers.contains_key(APP_NAME));
     }
 }

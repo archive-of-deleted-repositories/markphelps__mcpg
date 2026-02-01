@@ -576,7 +576,7 @@ mod tests {
         let params = InitializeParams {
             protocol_version: "0.1.0".to_string(),
             client_info: ClientInfo {
-                name: "mcpg".to_string(),
+                name: crate::config::APP_NAME.to_string(),
                 version: "0.1.0".to_string(),
             },
             capabilities: ClientCapabilities::default(),
@@ -584,7 +584,7 @@ mod tests {
 
         let json = serde_json::to_string(&params).unwrap();
         assert!(json.contains(r#""protocolVersion":"0.1.0""#));
-        assert!(json.contains(r#""name":"mcpg""#));
+        assert!(json.contains(&format!(r#""name":"{}""#, crate::config::APP_NAME)));
     }
 
     #[test]

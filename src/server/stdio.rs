@@ -76,7 +76,7 @@ impl GatewayServer {
         let result = InitializeResult {
             protocol_version: PROTOCOL_VERSION.to_string(),
             server_info: ServerInfo {
-                name: "mcpg".to_string(),
+                name: crate::config::APP_NAME.to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
             capabilities: ServerCapabilities {
@@ -517,7 +517,7 @@ mod tests {
         assert!(response.result.is_some());
 
         let result: InitializeResult = serde_json::from_value(response.result.unwrap()).unwrap();
-        assert_eq!(result.server_info.name, "mcpg");
+        assert_eq!(result.server_info.name, crate::config::APP_NAME);
         assert_eq!(result.protocol_version, PROTOCOL_VERSION);
         assert!(result.capabilities.resources.is_some());
         assert!(result.capabilities.prompts.is_some());

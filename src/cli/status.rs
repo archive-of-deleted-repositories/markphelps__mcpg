@@ -11,7 +11,7 @@ use tracing_subscriber::EnvFilter;
 pub fn run(args: StatusArgs, verbose: bool) -> Result<()> {
     if verbose {
         tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new("mcpg=debug"))
+            .with_env_filter(EnvFilter::new(format!("{}=debug", crate::config::APP_NAME)))
             .with_writer(std::io::stderr)
             .without_time()
             .init();
@@ -57,7 +57,10 @@ fn show_installed(
     agents: &[Box<dyn Agent>],
     config: &Config,
 ) -> Result<()> {
-    println!("{}", style::success("mcpg is installed"));
+    println!(
+        "{}",
+        style::success(&format!("{} is installed", crate::config::APP_NAME))
+    );
     println!();
 
     let agent = agents
@@ -120,7 +123,10 @@ fn show_not_installed(
     args: &StatusArgs,
     agents: &[Box<dyn Agent>],
 ) -> Result<()> {
-    println!("{}", style::error("mcpg is not installed"));
+    println!(
+        "{}",
+        style::error(&format!("{} is not installed", crate::config::APP_NAME))
+    );
 
     if args.detail && !agents.is_empty() {
         println!();
@@ -161,7 +167,10 @@ fn show_not_installed(
     }
 
     println!();
-    println!("  Run '{}' to get started.", style::header("mcpg install"));
+    println!(
+        "  Run '{}' to get started.",
+        style::header(&format!("{} install", crate::config::APP_NAME))
+    );
 
     println!();
     Ok(())

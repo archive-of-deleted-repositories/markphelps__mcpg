@@ -19,7 +19,8 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 /// - An env-filter using RUST_LOG (defaults to "mcpg=info")
 /// - Optional OpenTelemetry layer when OTEL_EXPORTER_OTLP_ENDPOINT is set
 pub fn init() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("mcpg=info"));
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(format!("{}=info", crate::config::APP_NAME)));
 
     let format = env::var("MCPG_LOG_FORMAT").unwrap_or_default();
 
@@ -67,7 +68,8 @@ fn init_otel_layer() -> Option<
     // Only enable if OTLP endpoint is configured
     let endpoint = env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok()?;
 
-    let service_name = env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "mcpg".to_string());
+    let service_name =
+        env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| crate::config::APP_NAME.to_string());
 
     // Build the OTLP exporter
     let exporter = opentelemetry_otlp::SpanExporter::builder()
@@ -86,7 +88,7 @@ fn init_otel_layer() -> Option<
 
     // Get a tracer from the provider
     use opentelemetry::trace::TracerProvider;
-    let tracer = tracer_provider.tracer("mcpg");
+    let tracer = tracer_provider.tracer(crate::config::APP_NAME);
 
     // Set the global tracer provider
     opentelemetry::global::set_tracer_provider(tracer_provider);

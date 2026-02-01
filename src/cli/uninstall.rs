@@ -21,7 +21,7 @@ pub fn run(args: UninstallArgs, verbose: bool) -> Result<()> {
     // Initialize tracing when verbose mode is enabled
     if verbose {
         tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new("mcpg=debug"))
+            .with_env_filter(EnvFilter::new(format!("{}=debug", crate::config::APP_NAME)))
             .with_writer(std::io::stderr)
             .without_time()
             .init();
@@ -54,7 +54,10 @@ pub fn run(args: UninstallArgs, verbose: bool) -> Result<()> {
         println!();
         println!(
             "{}",
-            style::info("mcpg is not configured for this project.")
+            style::info(&format!(
+                "{} is not configured for this project.",
+                crate::config::APP_NAME
+            ))
         );
         return Ok(());
     }

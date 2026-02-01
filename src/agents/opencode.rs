@@ -5,6 +5,7 @@ use super::config_file::ConfigFile;
 use super::shared::{self, LoadedSource};
 use super::{registry, Agent, ServerWithSource};
 use crate::config::{ServerConfig, TransportConfig};
+use crate::config::APP_NAME;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -135,9 +136,9 @@ impl OpenCodeAgent {
     fn load_source(&self, source_path: &Path) -> Result<LoadedSource> {
         let raw_servers = self.load_servers_from_source(source_path)?;
 
-        let has_mcpg = raw_servers.contains_key("mcpg");
+        let has_mcpg = raw_servers.contains_key(APP_NAME);
         let mcpg_disabled = raw_servers
-            .get("mcpg")
+            .get(APP_NAME)
             .map(|s| s.enabled == Some(false))
             .unwrap_or(false);
 
@@ -145,7 +146,7 @@ impl OpenCodeAgent {
         let mut disabled_names = Vec::new();
 
         for (name, oc_server) in raw_servers {
-            if name == "mcpg" {
+            if name == APP_NAME {
                 trace!(server = %name, "Skipping mcpg server");
                 continue;
             }
@@ -179,7 +180,7 @@ impl OpenCodeAgent {
     fn mcpg_server_config() -> OpenCodeMcpServer {
         OpenCodeMcpServer {
             server_type: "local".to_string(),
-            command: Some(vec!["mcpg".to_string()]),
+            command: Some(vec![APP_NAME.to_string()]),
             environment: None,
             url: None,
             headers: None,
@@ -207,10 +208,10 @@ impl OpenCodeAgent {
         }
 
         // Add mcpg if requested
-        if add_mcpg && !config.mcp.contains_key("mcpg") {
+        if add_mcpg && !config.mcp.contains_key(APP_NAME) {
             config
                 .mcp
-                .insert("mcpg".to_string(), Self::mcpg_server_config());
+                .insert(APP_NAME.to_string(), Self::mcpg_server_config());
         }
 
         config_file.save(&config)
@@ -429,7 +430,7 @@ mod tests {
         let agent = OpenCodeAgent::new();
         let server = OpenCodeMcpServer {
             server_type: "local".to_string(),
-            command: Some(vec!["mcpg".to_string()]),
+            command: Some(vec![APP_NAME.to_string()]),
             environment: None,
             url: None,
             headers: None,
@@ -440,7 +441,7 @@ mod tests {
         let config = agent.convert_to_server_config("test", &server).unwrap();
         match &config.transport {
             TransportConfig::Stdio { command, args, .. } => {
-                assert_eq!(command, "mcpg");
+                assert_eq!(command, APP_NAME);
                 assert!(args.is_none());
             }
             _ => panic!("Expected Stdio transport"),
@@ -792,7 +793,7 @@ mod tests {
             &project_path.join("opencode.json"),
             [
                 ("github".to_string(), local_server(&["github-cmd"])),
-                ("mcpg".to_string(), local_server(&["mcpg"])),
+                (APP_NAME.to_string(), local_server(&[APP_NAME])),
             ]
             .into(),
         );
@@ -851,8 +852,8 @@ mod tests {
         // slack should be untouched
         assert_ne!(updated.mcp["slack"].enabled, Some(false));
         // mcpg should be added
-        assert!(updated.mcp.contains_key("mcpg"));
-        assert_eq!(updated.mcp["mcpg"].server_type, "local");
+        assert!(updated.mcp.contains_key(APP_NAME));
+        assert_eq!(updated.mcp[APP_NAME].server_type, "local");
     }
 
     #[test]
@@ -909,13 +910,13 @@ mod tests {
         let project_updated: OpenCodeConfig =
             serde_json::from_str(&fs::read_to_string(&project_config).unwrap()).unwrap();
         assert_eq!(project_updated.mcp["github"].enabled, Some(false));
-        assert!(project_updated.mcp.contains_key("mcpg"));
+        assert!(project_updated.mcp.contains_key(APP_NAME));
 
         // Global config: slack disabled, mcpg NOT added
         let global_updated: OpenCodeConfig =
             serde_json::from_str(&fs::read_to_string(&global_config).unwrap()).unwrap();
         assert_eq!(global_updated.mcp["slack"].enabled, Some(false));
-        assert!(!global_updated.mcp.contains_key("mcpg"));
+        assert!(!global_updated.mcp.contains_key(APP_NAME));
     }
 
     #[test]
@@ -1009,12 +1010,12 @@ mod tests {
         fs::create_dir_all(&project_path).unwrap();
         fs::create_dir_all(&fake_home).unwrap();
 
-        let mut mcpg = local_server(&["mcpg"]);
+        let mut mcpg = local_server(&[APP_NAME]);
         mcpg.enabled = Some(false);
 
         create_opencode_config(
             &project_path.join("opencode.json"),
-            [("mcpg".to_string(), mcpg)].into(),
+            [(APP_NAME.to_string(), mcpg)].into(),
         );
 
         let agent = OpenCodeAgent::with_home_dir(fake_home);

@@ -60,7 +60,7 @@ impl super::Config {
         // 4. Fallback to user config
         let user_config_path = dirs::config_dir()
             .context("Could not determine user config directory")?
-            .join("mcpg")
+            .join(super::APP_NAME)
             .join("config.json");
         if user_config_path.exists() {
             let config = from_file(&user_config_path)?;

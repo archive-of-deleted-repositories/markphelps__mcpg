@@ -1,3 +1,4 @@
+use crate::config::APP_NAME;
 use crate::config::ServerConfig;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -181,7 +182,7 @@ pub(crate) fn find_mcpg_source(
     }
 
     // Return None if mcpg is disabled
-    if any_mcpg_disabled || all_disabled_names.contains(&"mcpg".to_string()) {
+    if any_mcpg_disabled || all_disabled_names.contains(&APP_NAME.to_string()) {
         return None;
     }
 

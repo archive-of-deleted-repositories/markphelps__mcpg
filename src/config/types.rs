@@ -2,6 +2,9 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Application name used for server identification, config keys, and display.
+pub const APP_NAME: &str = "mcpg";
+
 /// Root configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
