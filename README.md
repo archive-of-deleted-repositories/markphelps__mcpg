@@ -11,6 +11,7 @@
 ### The Problem
 
 Traditional MCP integration loads all tool schemas at startup:
+
 - 5 MCP servers × ~3,500 tokens each = **~18,000 tokens**
 - Severely limits context available for actual work
 - Wasteful when you only need 1-2 tools per task
@@ -18,6 +19,7 @@ Traditional MCP integration loads all tool schemas at startup:
 ### The Solution
 
 `mcpg` acts as an MCP gateway server that exposes discovery tools:
+
 - **search** - Find relevant tools across all servers (~50 tokens)
 - **inspect** - Get schema for specific tool (~150 tokens)
 - **call** - Execute a tool on the upstream server
@@ -52,6 +54,7 @@ mcpg install --yes
 ```
 
 This will:
+
 1. Detect your AI agent configuration (currently supports Claude Code)
 2. Show you all configured MCP servers across your config files
 3. Let you select which servers to route through mcpg
@@ -99,12 +102,12 @@ If you prefer to configure manually:
 
 mcpg exposes 4 gateway tools for progressive discovery:
 
-| Tool | Description |
-|------|-------------|
-| `search` | Find tools matching a query across all servers |
-| `inspect` | Get detailed schema for a specific tool |
-| `call` | Execute a tool on an upstream server |
-| `list` | List configured servers or tools on a server |
+| Tool      | Description                                    |
+| --------- | ---------------------------------------------- |
+| `search`  | Find tools matching a query across all servers |
+| `inspect` | Get detailed schema for a specific tool        |
+| `call`    | Execute a tool on an upstream server           |
+| `list`    | List configured servers or tools on a server   |
 
 ### Resources and Prompts
 
@@ -280,11 +283,13 @@ Connects to remote MCP servers over HTTP using the Streamable HTTP protocol (MCP
 ```
 
 **Configuration Options:**
+
 - `timeout_secs` (optional): Request timeout in seconds (default: 30)
 - `headers` (optional): Custom HTTP headers to send with each request
 - `url`: The MCP endpoint URL (must support Streamable HTTP)
 
 **Protocol Details:**
+
 - Uses MCP Streamable HTTP specification (2025-06-18)
 - Single endpoint for all operations (POST to URL)
 - Session management via `Mcp-Session-Id` header
@@ -292,15 +297,18 @@ Connects to remote MCP servers over HTTP using the Streamable HTTP protocol (MCP
 
 ## Supported Agents
 
-### Claude Code
+<details>
+<summary>Claude Code</summary>
 
 `mcpg install` detects and migrates servers from Claude Code's config files, checked in priority order:
 
 **Project-scoped:**
+
 1. `.mcp.json`
 2. `.claude/settings.local.json`
 
 **User-scoped:**
+
 3. `~/.claude/settings.local.json`
 4. `~/.claude/settings.json`
 5. `~/.claude.json`
@@ -308,49 +316,12 @@ Connects to remote MCP servers over HTTP using the Streamable HTTP protocol (MCP
 
 When migrating, mcpg adds itself to the highest-priority config source that contains servers, and disables the migrated servers via `disabledMcpServers` in each source file.
 
-## Testing
-
-### Prerequisites
-
-Integration tests require Node.js (version 18+) to run the official MCP everything server.
-
-### Running Tests
-
-```bash
-# All tests (unit + integration)
-cargo test
-
-# Unit tests only
-cargo test --lib --bins
-
-# Integration tests only
-cargo test --test integration
-
-# CLI integration tests
-cargo test --test cli
-
-# Skip integration tests (if Node.js not available)
-SKIP_INTEGRATION_TESTS=1 cargo test
-```
-
-See [tests/README.md](tests/README.md) for more details.
+</details>
 
 ## Development
 
-```bash
-# Check formatting
-cargo fmt --check
-
-# Run linter
-cargo clippy
-
-# Build
-cargo build
-
-# Run
-cargo run
-```
+For information on building, testing, and contributing to mcpg, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## License
 
-[Add your license here]
+[MIT](License)
