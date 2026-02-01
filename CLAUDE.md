@@ -36,6 +36,14 @@ mcpg uninstall --yes        # Skip confirmation prompts
 mcpg uninstall -y           # Short form of --yes
 mcpg uninstall --verbose    # Show debug output
 mcpg -v uninstall           # Verbose flag is global
+
+# Check status
+mcpg status
+
+# Status with options
+mcpg status --detail       # Show detailed configuration info
+mcpg status --verbose      # Show debug output
+mcpg -v status             # Verbose flag is global
 ```
 
 ### Install Command
@@ -47,6 +55,14 @@ The `install` command bootstraps mcpg for a project by:
 4. Adding mcpg to the agent's config (in the same file where servers are defined)
 5. Disabling migrated servers in their source configs (via `disabledMcpServers`)
 6. Creating backup files before modifying any configs
+
+### Status Command
+
+The `status` command checks if mcpg is configured for the current project:
+1. Detects AI agent configurations
+2. Checks for `.mcpg.json` and mcpg in agent config
+3. Shows install status, agent name, and server count
+4. With `--detail`: shows upstream servers, agent config path, and backups
 
 ### Uninstall Command
 
@@ -127,6 +143,7 @@ src/
 ├── cli/              # CLI commands
 │   ├── mod.rs        # Clap CLI definitions
 │   ├── install.rs    # Install command implementation
+│   ├── status.rs     # Status command implementation
 │   ├── uninstall.rs  # Uninstall command implementation
 │   └── style.rs      # Terminal styling utilities
 ├── agents/           # AI agent configuration management

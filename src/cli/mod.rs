@@ -16,6 +16,8 @@ pub enum Commands {
     /// Run the MCP Gateway server (default)
     Serve,
     Install(InstallArgs),
+    /// Check if mcpg is configured for the current project
+    Status(StatusArgs),
     Uninstall(UninstallArgs),
 }
 
@@ -30,6 +32,13 @@ pub struct InstallArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct StatusArgs {
+    /// Show detailed configuration information
+    #[arg(long)]
+    pub detail: bool,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct UninstallArgs {
     /// Show what would change without writing
     #[arg(long)]
@@ -40,6 +49,7 @@ pub struct UninstallArgs {
 }
 
 pub mod install;
+pub mod status;
 pub mod style;
 pub mod uninstall;
 
@@ -150,6 +160,26 @@ mod tests {
                 assert!(args.yes);
             }
             _ => panic!("Expected Uninstall command"),
+        }
+    }
+
+    #[test]
+    fn test_status_command() {
+        let cli = Cli::parse_from(["mcpg", "status"]);
+        match cli.command {
+            Some(Commands::Status(args)) => {
+                assert!(!args.detail);
+            }
+            _ => panic!("Expected Status command"),
+        }
+    }
+
+    #[test]
+    fn test_status_with_detail() {
+        let cli = Cli::parse_from(["mcpg", "status", "--detail"]);
+        match cli.command {
+            Some(Commands::Status(args)) => assert!(args.detail),
+            _ => panic!("Expected Status command"),
         }
     }
 }

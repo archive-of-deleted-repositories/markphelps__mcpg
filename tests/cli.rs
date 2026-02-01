@@ -5,5 +5,8 @@
 #[path = "cli/install_test.rs"]
 mod install_test;
 
+#[path = "cli/status_test.rs"]
+mod status_test;
+
 #[path = "cli/uninstall_test.rs"]
 mod uninstall_test;
