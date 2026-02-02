@@ -4,7 +4,7 @@ This guide covers development setup, building, testing, and contributing to mcpg
 
 ## Prerequisites
 
-- **Rust** - 1.85+ (required for edition 2024)
+- **Rust** - 1.87+ (required for edition 2024 and let-chains)
 - **Node.js** - 18+ (required for integration tests)
 - **npm** - For installing development dependencies
 
