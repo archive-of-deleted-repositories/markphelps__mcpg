@@ -278,10 +278,10 @@ fn show_plan(plan: &InstallPlan) -> Result<()> {
 
     // Backup info - include all files that will be modified
     let mut files_to_backup: Vec<&PathBuf> = servers_by_source.keys().collect();
-    if let Some(target) = &mcpg_target
-        && !files_to_backup.contains(&target)
-    {
-        files_to_backup.push(target);
+    if let Some(target) = &mcpg_target {
+        if !files_to_backup.contains(&target) {
+            files_to_backup.push(target);
+        }
     }
     for source in &files_to_backup {
         println!("{}: {}.backup", style::key("Will backup"), source.display());

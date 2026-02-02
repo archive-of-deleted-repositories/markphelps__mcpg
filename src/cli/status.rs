@@ -137,30 +137,30 @@ fn show_not_installed(
 
         let mut found_any = false;
         for agent in agents {
-            if let Ok(servers) = agent.get_servers(project_path)
-                && !servers.is_empty()
-            {
-                if !found_any {
-                    println!();
-                    println!("  MCP servers found:");
-                    found_any = true;
-                }
+            if let Ok(servers) = agent.get_servers(project_path) {
+                if !servers.is_empty() {
+                    if !found_any {
+                        println!();
+                        println!("  MCP servers found:");
+                        found_any = true;
+                    }
 
-                let mut names: Vec<(&String, &PathBuf)> =
-                    servers.iter().map(|(name, s)| (name, &s.source)).collect();
-                names.sort_by_key(|(name, _)| name.to_string());
+                    let mut names: Vec<(&String, &PathBuf)> =
+                        servers.iter().map(|(name, s)| (name, &s.source)).collect();
+                    names.sort_by_key(|(name, _)| name.to_string());
 
-                for (name, source) in names {
-                    let source_display = source
-                        .file_name()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| source.display().to_string());
-                    println!(
-                        "    {} {}  {}",
-                        style::ARROW,
-                        name,
-                        style::dim(&format!("(from {})", source_display))
-                    );
+                    for (name, source) in names {
+                        let source_display = source
+                            .file_name()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| source.display().to_string());
+                        println!(
+                            "    {} {}  {}",
+                            style::ARROW,
+                            name,
+                            style::dim(&format!("(from {})", source_display))
+                        );
+                    }
                 }
             }
         }
