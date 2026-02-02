@@ -204,8 +204,8 @@ impl ClaudeCodeAgent {
 
         match source.level {
             ConfigLevel::Project => {
-                let config: ProjectLevelConfig = serde_json::from_str(&content)
-                    .with_context(|| {
+                let config: ProjectLevelConfig =
+                    super::config_file::parse_jsonc(&content).with_context(|| {
                         format!("Failed to parse project config: {}", source.path.display())
                     })?;
                 debug!(
@@ -216,9 +216,10 @@ impl ClaudeCodeAgent {
                 Ok((config.mcp_servers, config.disabled_mcp_servers))
             }
             ConfigLevel::User => {
-                let config: UserLevelConfig = serde_json::from_str(&content).with_context(|| {
-                    format!("Failed to parse user config: {}", source.path.display())
-                })?;
+                let config: UserLevelConfig =
+                    super::config_file::parse_jsonc(&content).with_context(|| {
+                        format!("Failed to parse user config: {}", source.path.display())
+                    })?;
 
                 let key = Self::find_project_key(project_path, &config.projects);
 

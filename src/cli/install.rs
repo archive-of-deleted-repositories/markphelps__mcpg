@@ -350,7 +350,7 @@ fn execute_plan(plan: &InstallPlan) -> Result<()> {
     println!();
     println!("{}", style::header("Done!"));
     println!();
-    println!("Restart Claude Code to use mcpg.");
+    println!("Restart {} to use mcpg.", plan.agent.name());
     println!();
     println!("{}", style::dim("Note: Ensure 'mcpg' is in your PATH"));
 

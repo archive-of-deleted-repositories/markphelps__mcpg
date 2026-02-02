@@ -120,7 +120,7 @@ impl OpenCodeAgent {
         let content = std::fs::read_to_string(source_path)
             .with_context(|| format!("Failed to read config file: {}", source_path.display()))?;
 
-        let config: OpenCodeConfig = serde_json::from_str(&content)
+        let config: OpenCodeConfig = super::config_file::parse_jsonc(&content)
             .with_context(|| format!("Failed to parse config: {}", source_path.display()))?;
 
         debug!(
@@ -224,11 +224,14 @@ impl Agent for OpenCodeAgent {
     }
 
     fn config_sources(&self, project_path: &Path) -> Vec<PathBuf> {
+        // OpenCode hardcodes its global config to ~/.config/opencode/opencode.json
+        // regardless of platform (not ~/Library/Application Support on macOS),
+        // so we must use $HOME/.config rather than dirs::config_dir().
         let config_dir = self
             .home_dir
             .as_ref()
             .map(|h| h.join(".config"))
-            .unwrap_or_else(|| dirs::config_dir().unwrap_or_default());
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"));
 
         vec![
             // Project-scoped (highest priority)
@@ -397,6 +400,38 @@ mod tests {
         let agent = OpenCodeAgent::new();
         let result = agent.load_servers_from_source(&config_path);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_servers_from_jsonc_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("opencode.json");
+        // JSONC config with comments and trailing commas
+        fs::write(
+            &config_path,
+            r#"{
+                "$schema": "https://opencode.ai/config.json",
+                // General settings
+                "theme": "dark",
+                "mcp": {
+                    "docs": {
+                        "type": "remote",
+                        "url": "https://docs.example.com/mcp"
+                    },
+                    "tools": {
+                        "type": "local",
+                        "command": ["npx", "example-server"], // local server
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let agent = OpenCodeAgent::new();
+        let servers = agent.load_servers_from_source(&config_path).unwrap();
+        assert_eq!(servers.len(), 2);
+        assert!(servers.contains_key("docs"));
+        assert!(servers.contains_key("tools"));
     }
 
     // ---- Conversion tests ----

@@ -3,6 +3,17 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Parse a JSONC string (JSON with comments and trailing commas) into a typed value.
+///
+/// Strips `//` line comments, `/* */` block comments, and trailing commas before
+/// parsing with serde_json. This is backwards-compatible with standard JSON.
+pub fn parse_jsonc<T: for<'de> Deserialize<'de>>(content: &str) -> serde_json::Result<T> {
+    let mut stripped = content.to_string();
+    // Best-effort: if stripping fails (e.g., unclosed comment), try parsing as-is
+    let _ = json_strip_comments::strip(&mut stripped);
+    serde_json::from_str(&stripped)
+}
+
 /// Generic config file handler for JSON-based agent configurations
 ///
 /// Provides common functionality for loading, saving, and backing up
@@ -36,11 +47,11 @@ where
         &self.path
     }
 
-    /// Load and deserialize the config file
+    /// Load and deserialize the config file (supports JSONC comments and trailing commas)
     pub fn load(&self) -> Result<T> {
         let content = fs::read_to_string(self.path())
             .with_context(|| format!("Failed to read config: {}", self.path().display()))?;
-        serde_json::from_str(&content)
+        parse_jsonc(&content)
             .with_context(|| format!("Failed to parse config: {}", self.path().display()))
     }
 
@@ -195,5 +206,89 @@ mod tests {
 
         let config_file = ConfigFile::<TestConfig>::new(config_path);
         assert!(config_file.create_backup().is_err());
+    }
+
+    // ---- parse_jsonc tests ----
+
+    #[test]
+    fn test_parse_jsonc_plain_json() {
+        let json = r#"{"name": "test", "value": 42}"#;
+        let config: TestConfig = parse_jsonc(json).unwrap();
+        assert_eq!(config.name, "test");
+        assert_eq!(config.value, 42);
+    }
+
+    #[test]
+    fn test_parse_jsonc_line_comments() {
+        let jsonc = r#"{
+            // This is a comment
+            "name": "test",
+            "value": 42 // inline comment
+        }"#;
+        let config: TestConfig = parse_jsonc(jsonc).unwrap();
+        assert_eq!(config.name, "test");
+        assert_eq!(config.value, 42);
+    }
+
+    #[test]
+    fn test_parse_jsonc_block_comments() {
+        let jsonc = r#"{
+            /* Block comment */
+            "name": "test",
+            "value": /* inline */ 42
+        }"#;
+        let config: TestConfig = parse_jsonc(jsonc).unwrap();
+        assert_eq!(config.name, "test");
+        assert_eq!(config.value, 42);
+    }
+
+    #[test]
+    fn test_parse_jsonc_trailing_commas() {
+        let jsonc = r#"{
+            "name": "test",
+            "value": 42,
+        }"#;
+        let config: TestConfig = parse_jsonc(jsonc).unwrap();
+        assert_eq!(config.name, "test");
+        assert_eq!(config.value, 42);
+    }
+
+    #[test]
+    fn test_parse_jsonc_comments_and_trailing_commas() {
+        let jsonc = r#"{
+            // A JSONC config file
+            "name": "test", // the name
+            "value": 42, /* trailing comma */
+        }"#;
+        let config: TestConfig = parse_jsonc(jsonc).unwrap();
+        assert_eq!(config.name, "test");
+        assert_eq!(config.value, 42);
+    }
+
+    #[test]
+    fn test_parse_jsonc_invalid_json_fails() {
+        let bad = "{ not valid json }";
+        let result: serde_json::Result<TestConfig> = parse_jsonc(bad);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_jsonc_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("test.json");
+        fs::write(
+            &config_path,
+            r#"{
+                // JSONC config
+                "name": "loaded",
+                "value": 99,
+            }"#,
+        )
+        .unwrap();
+
+        let config_file = ConfigFile::<TestConfig>::new(config_path);
+        let loaded = config_file.load().unwrap();
+        assert_eq!(loaded.name, "loaded");
+        assert_eq!(loaded.value, 99);
     }
 }
