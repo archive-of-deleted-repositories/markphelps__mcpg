@@ -144,10 +144,10 @@ pub(crate) fn apply_changes_to_sources(
     }
 
     // If no servers were disabled but we have a target for mcpg, add it there
-    if sources_to_update.is_empty()
-        && let Some(target) = mcpg_target_source
-    {
-        update_fn(&target, &[], true)?;
+    if sources_to_update.is_empty() {
+        if let Some(target) = mcpg_target_source {
+            update_fn(&target, &[], true)?;
+        }
     }
 
     Ok(())

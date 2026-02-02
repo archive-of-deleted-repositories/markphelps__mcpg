@@ -104,14 +104,14 @@ impl HttpClient {
         }
 
         // Extract session ID from initialize response
-        if method == McpMethod::Initialize.as_str()
-            && let Some(session_id) = response.headers().get("Mcp-Session-Id")
-        {
-            let session_id_str = session_id
-                .to_str()
-                .map_err(|e| McpError::InvalidSessionId(e.to_string()))?
-                .to_string();
-            self.session_id = Some(session_id_str);
+        if method == McpMethod::Initialize.as_str() {
+            if let Some(session_id) = response.headers().get("Mcp-Session-Id") {
+                let session_id_str = session_id
+                    .to_str()
+                    .map_err(|e| McpError::InvalidSessionId(e.to_string()))?
+                    .to_string();
+                self.session_id = Some(session_id_str);
+            }
         }
 
         // Parse response

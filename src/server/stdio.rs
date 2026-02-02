@@ -109,20 +109,21 @@ impl GatewayServer {
     ) -> Result<JsonRpcResponse> {
         // MCP pagination: since mcpg never emits cursors for tools/list,
         // any non-null cursor is invalid (error -32602 per spec)
-        if let Some(ref p) = params
-            && let Some(cursor) = p.get("cursor")
-            && !cursor.is_null()
-        {
-            return Ok(JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                id,
-                result: None,
-                error: Some(JsonRpcError {
-                    code: JSONRPC_INVALID_PARAMS,
-                    message: "Invalid params: unknown cursor".to_string(),
-                    data: None,
-                }),
-            });
+        if let Some(ref p) = params {
+            if let Some(cursor) = p.get("cursor") {
+                if !cursor.is_null() {
+                    return Ok(JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id,
+                        result: None,
+                        error: Some(JsonRpcError {
+                            code: JSONRPC_INVALID_PARAMS,
+                            message: "Invalid params: unknown cursor".to_string(),
+                            data: None,
+                        }),
+                    });
+                }
+            }
         }
 
         let result = ListToolsResult {
@@ -209,20 +210,21 @@ impl GatewayServer {
         params: Option<serde_json::Value>,
     ) -> Result<JsonRpcResponse> {
         // Cursor validation — same pattern as tools/list
-        if let Some(ref p) = params
-            && let Some(cursor) = p.get("cursor")
-            && !cursor.is_null()
-        {
-            return Ok(JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                id,
-                result: None,
-                error: Some(JsonRpcError {
-                    code: JSONRPC_INVALID_PARAMS,
-                    message: "Invalid params: unknown cursor".to_string(),
-                    data: None,
-                }),
-            });
+        if let Some(ref p) = params {
+            if let Some(cursor) = p.get("cursor") {
+                if !cursor.is_null() {
+                    return Ok(JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id,
+                        result: None,
+                        error: Some(JsonRpcError {
+                            code: JSONRPC_INVALID_PARAMS,
+                            message: "Invalid params: unknown cursor".to_string(),
+                            data: None,
+                        }),
+                    });
+                }
+            }
         }
 
         // Ensure cache is populated (connects to upstream servers)
@@ -314,20 +316,21 @@ impl GatewayServer {
         id: RequestId,
         params: Option<serde_json::Value>,
     ) -> Result<JsonRpcResponse> {
-        if let Some(ref p) = params
-            && let Some(cursor) = p.get("cursor")
-            && !cursor.is_null()
-        {
-            return Ok(JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                id,
-                result: None,
-                error: Some(JsonRpcError {
-                    code: JSONRPC_INVALID_PARAMS,
-                    message: "Invalid params: unknown cursor".to_string(),
-                    data: None,
-                }),
-            });
+        if let Some(ref p) = params {
+            if let Some(cursor) = p.get("cursor") {
+                if !cursor.is_null() {
+                    return Ok(JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id,
+                        result: None,
+                        error: Some(JsonRpcError {
+                            code: JSONRPC_INVALID_PARAMS,
+                            message: "Invalid params: unknown cursor".to_string(),
+                            data: None,
+                        }),
+                    });
+                }
+            }
         }
 
         self.ensure_cache_populated().await?;

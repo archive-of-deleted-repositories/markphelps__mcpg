@@ -78,19 +78,19 @@ impl<'de> Deserialize<'de> for TransportConfig {
         let mut value = Value::deserialize(deserializer)?;
 
         // If type field is missing, infer it from the fields present
-        if let Value::Object(ref mut map) = value
-            && !map.contains_key("type")
-        {
-            let inferred_type = if map.contains_key("command") {
-                "stdio"
-            } else if map.contains_key("url") {
-                "http"
-            } else {
-                return Err(D::Error::custom(
-                    "Cannot infer transport type: must have either 'command' or 'url' field",
-                ));
-            };
-            map.insert("type".to_string(), Value::String(inferred_type.to_string()));
+        if let Value::Object(ref mut map) = value {
+            if !map.contains_key("type") {
+                let inferred_type = if map.contains_key("command") {
+                    "stdio"
+                } else if map.contains_key("url") {
+                    "http"
+                } else {
+                    return Err(D::Error::custom(
+                        "Cannot infer transport type: must have either 'command' or 'url' field",
+                    ));
+                };
+                map.insert("type".to_string(), Value::String(inferred_type.to_string()));
+            }
         }
 
         // Now deserialize with the type field present
