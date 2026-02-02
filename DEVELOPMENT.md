@@ -4,9 +4,17 @@ This guide covers development setup, building, testing, and contributing to mcpg
 
 ## Prerequisites
 
-- **Rust** - 1.70+ (install via [rustup](https://rustup.rs/))
+- **Rust** - 1.85+ (required for edition 2024)
 - **Node.js** - 18+ (required for integration tests)
 - **npm** - For installing development dependencies
+
+The easiest way to install the correct versions is with [mise](https://mise.jdx.dev/):
+
+```bash
+mise install
+```
+
+This reads `mise.toml` and installs the pinned versions of Rust and Node.js automatically.
 
 ## Setup
 
@@ -17,7 +25,13 @@ git clone https://github.com/markphelps/mcpg.git
 cd mcpg
 ```
 
-2. Install npm dependencies (for pre-commit hooks):
+2. Install tool versions (if using mise):
+
+```bash
+mise install
+```
+
+3. Install npm dependencies (for pre-commit hooks):
 
 ```bash
 npm install
