@@ -6,6 +6,16 @@ docs/
 # Personal MCP config (may contain secrets)
 mcp.local.json
 
+# Environment files
+.env
+.env.*
+
+# Backup files created by mcpg install
+*.backup
+
+# macOS
+.DS_Store
+
 # Sandbox files (except .gitkeep)
 examples/sandbox/*
 !examples/sandbox/.gitkeep

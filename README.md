@@ -4,6 +4,8 @@
 
 **MCP Gateway** - A lightweight MCP server that acts as a gateway to upstream MCP servers with progressive tool discovery.
 
+> **Note**: This project is a work in progress. APIs and configuration formats may change.
+
 ## What is mcpg?
 
 `mcpg` is an MCP (Model Context Protocol) server that sits between AI agents (like Claude) and your collection of MCP servers. Instead of loading all tool definitions upfront (consuming thousands of context tokens), it provides progressive discovery through a search-first workflow.
@@ -336,4 +338,4 @@ For information on building, testing, and contributing to mcpg, see [DEVELOPMENT
 
 ## License
 
-[MIT](License)
+[MIT](LICENSE)

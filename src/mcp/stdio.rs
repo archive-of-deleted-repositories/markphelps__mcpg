@@ -187,7 +187,7 @@ impl McpClient for StdioClient {
                     .ok_or_else(|| anyhow::anyhow!("No result in initialize response"))?,
             )?;
 
-            // TODO: handle protocol version negotiation!
+            // Protocol version negotiation is not yet implemented.
             self.init_result = Some(init_result.clone());
 
             // Send notifications/initialized to signal that initialization is complete

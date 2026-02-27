@@ -3,6 +3,9 @@ name = "mcpg"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.87"
+description = "MCP Gateway - A lightweight MCP server that acts as a gateway to upstream MCP servers with progressive tool discovery"
+license = "MIT"
+repository = "https://github.com/markphelps/mcpg"
 
 [dependencies]
 dirs = "6.0.0"
